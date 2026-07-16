@@ -1,4 +1,4 @@
-# local_LLMs
+# local-llms
 
 Local Qwen models, for two jobs:
 
