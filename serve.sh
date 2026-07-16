@@ -59,6 +59,33 @@ resolve_mmproj() {
     find "$(dirname "$_g")" -maxdepth 1 -name "mmproj*.gguf" 2>/dev/null | head -1
 }
 
+# Make sure the GPU may wire down at least $1 MB, where that is a thing at all.
+#
+# Apple Silicon shares one pool of memory between CPU and GPU and caps how much
+# of it the GPU may wire down, so a big model needs the cap raised. It's a cap,
+# not a reservation, so raising it costs nothing at idle; resets on reboot.
+# Nothing else has this knob -- a discrete GPU has its own VRAM -- so a sysctl
+# that isn't there means there is nothing to do, not that anything is wrong.
+raise_wired_limit() {
+    _need=$1
+    [ "$_need" -gt 0 ] || return 0
+
+    _current=$(sysctl -n iogpu.wired_limit_mb 2>/dev/null) || return 0
+    case $_current in '' | *[!0-9]*) return 0 ;; esac
+
+    # 0 means "the kernel default", not "no memory": roughly three quarters of
+    # installed RAM. Measuring against that is what stops a machine with RAM to
+    # spare from having its cap *lowered* to a preset's number.
+    if [ "$_current" -eq 0 ]; then
+        _total=$(sysctl -n hw.memsize 2>/dev/null) || return 0
+        _current=$((_total / 1048576 * 3 / 4))
+    fi
+
+    [ "$_current" -lt "$_need" ] || return 0
+    echo "Raising GPU wired limit to ${_need} MB (sudo)..."
+    sudo sysctl iogpu.wired_limit_mb="$_need" || exit 1
+}
+
 # section <tab> gguf <tab> mmproj-or-empty
 MAP="$TMP/map"
 : > "$MAP"
@@ -130,8 +157,7 @@ awk -v mapfile="$MAP" -v dir="$DIR" '
     }
 ' "$INI" > "$RESOLVED"
 
-# The router loads on demand, so raise the cap to the largest any preset asks
-# for. It's a cap, not a reservation; resets on reboot.
+# The router loads on demand, so ask for the largest any preset wants.
 NEED=$(awk '
     /^[ \t]*#/ { next }
     !/=/ { next }
@@ -143,21 +169,15 @@ NEED=$(awk '
     }
     END { print m + 0 }
 ' "$INI")
-if [ "$NEED" -gt 0 ]; then
-    current=$(sysctl -n iogpu.wired_limit_mb)
-    if [ "$current" -eq 0 ] || [ "$current" -lt "$NEED" ]; then
-        echo "Raising GPU wired limit to ${NEED} MB (sudo)..."
-        sudo sysctl iogpu.wired_limit_mb="$NEED" || exit 1
-    fi
-fi
+raise_wired_limit "$NEED"
 
 echo "Serving $(presets | wc -l | tr -d ' ') models from models.ini on 127.0.0.1:${PORT}"
 
 # HF_HOME points at an empty dir to stop the router advertising the whole
 # llama.cpp cache alongside the presets, listing each model twice in /model
 # (no flag for that in b9960) -- which is also why the presets carry absolute
-# paths by now. --models-max 1 is load-bearing: 16 GB holds exactly one of
-# these models, and the default of 4 would OOM on every /model switch.
+# paths by now. --models-max 1 is load-bearing: on a machine sized for exactly
+# one of these models, the default of 4 would OOM on a /model switch.
 mkdir -p "$TMP/emptycache"
 HF_HOME="$TMP/emptycache" exec llama-server \
     --models-preset "$RESOLVED" \

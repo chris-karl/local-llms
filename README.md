@@ -1,12 +1,21 @@
 # local_LLMs
 
-Local Qwen models on a 16 GB M1 Pro, for two jobs:
+Local Qwen models, for two jobs:
 
 - **CLI chat, no server** — `./chat.sh qwen-9b`
 - **A local backend for Claude Code** — `./serve.sh`, then `./claude-local/claude-local.sh`
 
 `models.ini` is the single source of truth for both. Add a model once there and
 it shows up in `./chat.sh` and in Claude Code's `/model` picker.
+
+**The presets are sized for unified memory** — an Apple Silicon Mac, where CPU
+and GPU share one pool of RAM. That is why `n-gpu-layers = 999` puts every
+layer on the GPU: there is no separate VRAM budget to fit them into, so the
+figures in `models.ini` are against total system RAM. The scripts hold nothing
+macOS-only beyond the wired-memory cap, which they skip where it doesn't exist,
+so a Linux or discrete-GPU machine runs them — but the sizing doesn't carry
+over. `qwen-27b`'s ~12 GB is a VRAM requirement there, and splitting a model
+across GPU and CPU means lowering `n-gpu-layers` rather than pinning it to 999.
 
 ## Files
 
@@ -79,10 +88,10 @@ claude-local                   # needs ./serve.sh running, as always
 `install.sh` symlinks rather than copies, so edits here take effect at once —
 but moving this repo breaks the link, and re-running it fixes it. If the target
 dir isn't on your PATH, it appends a guarded block to the rc file of your login
-shell, auto-detected (zsh, bash, fish, ksh, else `~/.profile`); then `. ~/.zshrc`,
-or open a new terminal. Install elsewhere with
-`BIN_DIR=/usr/local/bin sudo ./claude-local/install.sh`, or pass `--no-rc` to
-link only and leave your shell config untouched.
+shell, auto-detected (zsh, bash, ksh, else `~/.profile`); then `. ~/.zshrc`,
+or open a new terminal. fish is the exception: it still gets the symlink, but
+its config is left alone and you put the dir on your PATH yourself. Install
+elsewhere with `BIN_DIR=/usr/local/bin sudo ./claude-local/install.sh`.
 
 `./claude-local/uninstall.sh` is the exact inverse: it drops the symlink, the
 PATH block, and the bin dir, leaving no trace. Each step is scoped to what
@@ -94,7 +103,7 @@ block (a PATH line you wrote yourself isn't matched), and only an empty dir.
 The usual advice is that Claude Code needs an Anthropic→OpenAI translation
 proxy (LiteLLM, claude-code-router) in front of a local server. That is **not**
 true for this llama.cpp build: b9960's `llama-server` implements the Anthropic
-Messages API directly. Verified on this machine:
+Messages API directly. Verified:
 
 - `POST /v1/messages` returns real Anthropic-shaped responses
   (`type: "message"`, content blocks, `stop_reason`, `usage`)
@@ -152,18 +161,18 @@ curl -s 127.0.0.1:8099/props \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["chat_template"])'
 ```
 
-## Performance and limits
+## Limits
 
 **Every model is selectable in `/model`; only `qwen-9b` has the context to
 drive Claude Code.** The picker lists all three because the router advertises
 all three. Both 27B presets run at `ctx-size 8192`, and Claude Code's system
 prompt plus tool definitions exceed that before you type anything, so picking
-one overflows context immediately. Raising their context isn't an option
-either: the 27B already needs ~12 GB of the 16 GB for weights alone. They're
-for `./chat.sh`.
+one overflows context immediately. Raising their context adds KV cache on top
+of weights that already dominate the budget these presets are sized for, so
+whether it fits depends on the machine. They're for `./chat.sh`.
 
-On the 9B, expect ~18 t/s generation, and tool-calling accuracy below a
-frontier model's — malformed calls and loops on non-trivial tasks are common.
+On the 9B, tool-calling accuracy is below a frontier model's — malformed calls
+and loops on non-trivial tasks are common.
 
 ## Notes
 
@@ -193,12 +202,17 @@ frontier model's — malformed calls and loops on non-trivial tasks are common.
   over `models.ini`. `./serve.sh --no-webui` is fine (the router keeps it to
   itself), but `./serve.sh --ctx-size 65536` silently gives the 27B a 64K
   context too, and it will OOM. Per-model settings belong in `models.ini`.
-- **The wired-memory limit resets on reboot.** Both scripts re-raise it via
-  `sudo sysctl iogpu.wired_limit_mb` when needed. It's a cap, not a
-  reservation, so a raised limit costs nothing while only the 9B is loaded.
-  Close PyCharm & co. before loading a 27B.
-- **`--models-max 1` in `serve.sh` is load-bearing.** The default is 4; on
-  16 GB, letting the router keep two of these resident at once will OOM.
+- **The wired-memory limit is an Apple Silicon thing, and resets on reboot.**
+  There, CPU and GPU share one pool of memory and the GPU may only wire down
+  part of it, so a preset asking for more than the current cap gets it raised
+  via `sudo sysctl iogpu.wired_limit_mb`. It's a cap, not a reservation, so a
+  raised limit costs nothing while only the 9B is loaded. Close memory-hungry
+  apps before loading a model that wants most of it. Both scripts skip the
+  raise where the sysctl doesn't exist, and where the cap is already high
+  enough — a machine with memory to spare is never asked for sudo.
+- **`--models-max 1` in `serve.sh` is load-bearing.** The default is 4; letting
+  the router keep two of these models resident at once will OOM a machine sized
+  for one.
 - **INI keys must be real llama.cpp long flags** — the router refuses to start
   on an unknown key. Use `n-gpu-layers`, not `ngl` (llama-cli only takes the
   short `-ngl`). Two keys are special. `wired-limit-mb` is a macOS sysctl

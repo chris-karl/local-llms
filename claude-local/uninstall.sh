@@ -56,8 +56,7 @@ for rc in \
     "$HOME/.bashrc" \
     "$HOME/.bash_profile" \
     "$HOME/.profile" \
-    "$HOME/.kshrc" \
-    "${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish"
+    "$HOME/.kshrc"
 do
     [ -f "$rc" ] || continue
     grep -qF "$MARK_START" "$rc" 2>/dev/null || continue

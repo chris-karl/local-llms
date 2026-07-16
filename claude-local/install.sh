@@ -4,7 +4,6 @@
 #
 #   ./install.sh                            symlink into ~/.local/bin
 #   BIN_DIR=/usr/local/bin sudo ./install.sh
-#   ./install.sh --no-rc                    link only, never touch a shell rc
 #
 # The link is a symlink, not a copy, so moving this repo breaks it (re-run to
 # fix). Undo with ./uninstall.sh.
@@ -13,10 +12,8 @@ set -eu
 MARK_START='# >>> claude-local >>>'
 MARK_END='# <<< claude-local <<<'
 
-no_rc=0
 for arg in "$@"; do
     case $arg in
-        --no-rc) no_rc=1 ;;
         # The header block above, up to the first line of actual code.
         -h|--help) sed -n '2,/^[^#]/p' "$0" | sed '$d' | cut -c3-; exit 0 ;;
         *) echo "unknown option: $arg (try --help)" >&2; exit 2 ;;
@@ -61,13 +58,6 @@ case ":$PATH:" in
         ;;
 esac
 
-if [ "$no_rc" -eq 1 ]; then
-    echo
-    echo "$BIN_DIR is not on your PATH. Add it yourself, e.g.:"
-    echo "    export PATH=\"$BIN_DIR:\$PATH\""
-    exit 0
-fi
-
 # The login shell, not the one running this script: the rc file that matters
 # is the one your terminals actually read. Fall back to the user record if
 # $SHELL is unset (cron, etc).
@@ -89,9 +79,17 @@ case $shell_name in
           then rc="$HOME/.bash_profile"
           else rc="$HOME/.bashrc"
           fi ;;
-    fish) rc="${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish" ;;
     ksh)  rc="$HOME/.kshrc" ;;
     sh|dash) rc="$HOME/.profile" ;;
+    # Not supported: every line of the block below is POSIX syntax fish cannot
+    # read, and ~/.profile -- where an unrecognised shell would land -- is a
+    # file fish never sources. So touch nothing and say so; the link above is
+    # made either way, and fish runs it happily once it is on PATH.
+    fish) echo
+          echo "$BIN_DIR is not on your PATH, and fish is not supported here."
+          echo "Add it yourself, with:"
+          echo "    fish_add_path $BIN_DIR"
+          exit 0 ;;
     *)    rc="$HOME/.profile"
           echo "  note     unrecognised shell '$shell_name', assuming POSIX" ;;
 esac
@@ -112,24 +110,14 @@ else
     # The leading \n also terminates a last line that lacks one, which is the
     # one thing uninstall.sh cannot undo -- such an rc keeps a trailing
     # newline afterwards.
-    if [ "$shell_name" = fish ]; then
-        {
-            printf '\n%s\n' "$MARK_START"
-            printf 'if not contains "%s" $PATH\n' "$path_expr"
-            printf '    set -gx PATH "%s" $PATH\n' "$path_expr"
-            printf 'end\n'
-            printf '%s\n' "$MARK_END"
-        } >> "$rc"
-    else
-        {
-            printf '\n%s\n' "$MARK_START"
-            printf 'case ":$PATH:" in\n'
-            printf '    *":%s:"*) ;;\n' "$path_expr"
-            printf '    *) export PATH="%s:$PATH" ;;\n' "$path_expr"
-            printf 'esac\n'
-            printf '%s\n' "$MARK_END"
-        } >> "$rc"
-    fi
+    {
+        printf '\n%s\n' "$MARK_START"
+        printf 'case ":$PATH:" in\n'
+        printf '    *":%s:"*) ;;\n' "$path_expr"
+        printf '    *) export PATH="%s:$PATH" ;;\n' "$path_expr"
+        printf 'esac\n'
+        printf '%s\n' "$MARK_END"
+    } >> "$rc"
     echo "  rc       added PATH block to $rc ($shell_name)"
 fi
 

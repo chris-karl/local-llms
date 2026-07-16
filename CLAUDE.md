@@ -130,10 +130,10 @@ mangles the formatting there. Verify the written file before handing over the pa
 
 ## Repository context
 
-This repo runs local Qwen models on a 16 GB M1 Pro, for CLI chat (`chat.sh`) and as a
-local backend for Claude Code (`serve.sh` plus `claude-local/`). `models.ini` is the
-single source of truth for both, and `templates/` holds the patched chat templates that
-Claude Code needs. See the README for the details.
+This repo runs local Qwen models for CLI chat (`chat.sh`) and as a local backend for
+Claude Code (`serve.sh` plus `claude-local/`). `models.ini` is the single source of truth
+for both, and `templates/` holds the patched chat templates that Claude Code needs. See
+the README for the details.
 
 - **`origin`** (`git@github.com:chris-karl/local-llms.git`) — the only remote and the
   primary working remote. All branches, commits, and pushes go here, and `main` tracks
