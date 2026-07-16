@@ -1,22 +1,45 @@
 #!/bin/sh
-# Run Claude Code against the local router from serve.sh, which must already
-# be running. Everything is scoped to this one process, so a plain "claude" in
-# any other terminal still talks to the real Anthropic API.
+# Run Claude Code against a local model, starting the router if it isn't up.
+# Everything is scoped to this one process, so a plain "claude" in any other
+# terminal still talks to the real Anthropic API.
 #
 #   ./claude-local.sh                  start on the default model
 #   ANTHROPIC_MODEL=claude-qwen-27b ./claude-local.sh
+#
+# The router is shared and refcounted: it is stopped once the last claude-local
+# exits, not when the one that started it does. See router.sh. One started by
+# hand with ./serve.sh is used as-is and never stopped.
 #
 # ./install.sh puts this on your PATH as "claude-local", usable from any
 # directory. Once inside, /model lists every section from models.ini.
 set -eu
 
+# Follow the symlink install.sh puts on your PATH, so router.sh and serve.sh
+# are found in the checkout rather than next to the link.
+SELF=$0
+case $SELF in
+    */*) ;;
+    *) SELF=$(command -v -- "$SELF") ;;
+esac
+_hops=0
+while [ -L "$SELF" ] && [ "$_hops" -lt 16 ]; do
+    _link=$(readlink -- "$SELF")
+    case $_link in
+        /*) SELF=$_link ;;
+        *) SELF=$(dirname -- "$SELF")/$_link ;;
+    esac
+    _hops=$((_hops + 1))
+done
+DIR=$(CDPATH= cd -- "$(dirname -- "$SELF")" && pwd)
+
 PORT=${PORT:-8080}
 BASE="http://127.0.0.1:${PORT}"
 
-if ! curl -sf -o /dev/null "$BASE/health"; then
-    echo "No router on $BASE -- start it first with:  ./serve.sh" >&2
-    exit 1
-fi
+# Registers this shell as one of the things keeping the router alive, starting
+# one if there is none. "exec claude" below keeps this pid, so the router lives
+# exactly as long as the session does, however it ends. PORT is passed rather
+# than exported: it is router.sh's business, not claude's.
+PORT="$PORT" "$DIR/router.sh" acquire "$$"
 
 export ANTHROPIC_BASE_URL="$BASE"
 

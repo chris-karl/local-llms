@@ -3,7 +3,7 @@
 Local Qwen models, for two jobs:
 
 - **CLI chat, no server** — `./chat.sh qwen-9b`
-- **A local backend for Claude Code** — `./serve.sh`, then `./claude-local/claude-local.sh`
+- **A local backend for Claude Code** — `./claude-local/claude-local.sh`
 
 `models.ini` is the single source of truth for both. Add a model once there and
 it shows up in `./chat.sh` and in Claude Code's `/model` picker.
@@ -24,7 +24,7 @@ across GPU and CPU means lowering `n-gpu-layers` rather than pinning it to 999.
 | `models.ini`    | Every model + its tuned flags. Edit this, not the scripts.                              |
 | `chat.sh`       | Interactive `llama-cli` chat, with a model picker. No server, no port.                  |
 | `serve.sh`      | `llama-server` in router mode, for Claude Code.                                         |
-| `claude-local/` | Runs Claude Code against the router, plus install/uninstall.                            |
+| `claude-local/` | Runs Claude Code against the router, starting and sharing one; plus install/uninstall.  |
 | `templates/`    | Each model's chat template, patched. Claude Code doesn't work without this — see below. |
 
 ## CLI chat
@@ -63,9 +63,11 @@ lose the conversation.
 ## Claude Code against a local model
 
 ```sh
-./serve.sh                        # terminal 1: router on 127.0.0.1:8080
-./claude-local/claude-local.sh    # terminal 2: Claude Code, wired to it
+./claude-local/claude-local.sh
 ```
+
+That is the whole command: with nothing listening yet, it starts a router
+(`serve.sh`) in the background and waits for it, which takes about a second.
 
 Inside, `/model` lists every model from `models.ini` — as `claude-qwen-9b`,
 `claude-qwen-27b`, … — and switches between them live, unloading the old model
@@ -73,6 +75,25 @@ before loading the new one. The prefix is not cosmetic; see the notes.
 
 `claude-local.sh` only sets env vars for its own process, so a plain `claude`
 in any other terminal still uses the real Anthropic API.
+
+### One router, shared by every terminal
+
+These models are far too big to load twice, so there is only ever one router
+and every `claude-local` shares it. It is refcounted rather than owned: the
+first one starts it, each later one joins the running one in milliseconds, and
+it is stopped once the **last** one exits — not when the one that started it
+does.
+
+So closing the window you opened first leaves the router up for the others,
+and closing the last one takes it down and gives the model's RAM back.
+Sessions that end badly count the same: the bookkeeping is a directory of pid
+files, swept every few seconds by the process that owns the router, so a
+`kill -9`'d session drops out of it exactly like a clean exit does.
+
+Running `./serve.sh` yourself still works, and what you start stays yours:
+`claude-local` uses a router it finds already listening and never stops one it
+did not start itself. That is the way to watch the logs live, or to hold a
+router up across sessions.
 
 ### Using it from anywhere
 
@@ -82,7 +103,7 @@ from, so it works in any project once it's on your PATH:
 ```sh
 ./claude-local/install.sh      # symlink -> ~/.local/bin/claude-local
 cd ~/some/other/project
-claude-local                   # needs ./serve.sh running, as always
+claude-local                   # starts or joins the router, as always
 ```
 
 `install.sh` symlinks rather than copies, so edits here take effect at once —
@@ -202,6 +223,25 @@ and loops on non-trivial tasks are common.
   over `models.ini`. `./serve.sh --no-webui` is fine (the router keeps it to
   itself), but `./serve.sh --ctx-size 65536` silently gives the 27B a 64K
   context too, and it will OOM. Per-model settings belong in `models.ini`.
+- **The auto-started router is detached from the terminal that started it.** It
+  has to outlive that window closing, and ignore a Ctrl+C meant for Claude
+  Code — a tty sends SIGINT to every process in the foreground process group,
+  and `llama-server` acts on it. So `claude-local` starts it under `nohup`
+  (SIGHUP ignored, which survives `exec`), in a process group of its own
+  (`setsid` where there is one, otherwise `set -m`, which is how `/bin/sh`
+  hands a background job its own group), with stdin on `/dev/null` and its
+  output in `router.log` — next to the pid files, under
+  `$TMPDIR/local_LLMs.<uid>/claude-local.<port>/`. That log is where a router
+  that won't start says why, and `claude-local` prints the tail of it when the
+  router doesn't come up.
+- **`claude-local` runs `serve.sh --preflight` first, in your terminal.**
+  Anything that needs a human has to happen before the router is detached:
+  `sudo` prompts on `/dev/tty`, which a background process group may not read
+  from, so the wired-limit raise cannot be left to the detached router — and a
+  preset that still needs downloading should say so where you are looking,
+  rather than in a log file. `--preflight` does exactly that much of
+  `serve.sh` — resolve the presets, report missing downloads, raise the cap —
+  and exits without serving.
 - **The wired-memory limit is an Apple Silicon thing, and resets on reboot.**
   There, CPU and GPU share one pool of memory and the GPU may only wire down
   part of it, so a preset asking for more than the current cap gets it raised

@@ -6,14 +6,31 @@
 #   ./serve.sh                 listen on 127.0.0.1:8080
 #   PORT=9000 ./serve.sh       listen elsewhere
 #   ./serve.sh --no-webui      API only, no browser UI
+#   ./serve.sh --preflight     do the checks that need a terminal, don't serve
 #
-# Then, in another terminal: ./claude-local/claude-local.sh
+# Running this by hand is optional: ./claude-local/claude-local.sh starts one
+# itself when nothing is listening yet, and stops it when the last one exits.
+# A router started here is left alone by claude-local -- it stays yours.
 set -eu
 
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 INI="$DIR/models.ini"
 PORT=${PORT:-8080}
 HUB="${HF_HOME:-$HOME/.cache/huggingface}/hub"
+
+# Ours, not llama.cpp's, so it has to come out of what is forwarded below.
+# Rotating through "$@" keeps every other argument as given, spaces and all.
+PREFLIGHT=""
+_argc=$#
+while [ "$_argc" -gt 0 ]; do
+    _argc=$((_argc - 1))
+    _arg=$1
+    shift
+    case $_arg in
+        --preflight) PREFLIGHT=1 ;;
+        *) set -- "$@" "$_arg" ;;
+    esac
+done
 
 # A fixed path, not mktemp -d: this script exec's into llama-server, so no exit
 # trap can ever run to clean up. Contents derive wholly from models.ini, so
@@ -170,6 +187,13 @@ NEED=$(awk '
     END { print m + 0 }
 ' "$INI")
 raise_wired_limit "$NEED"
+
+# Everything above wanted a terminal: missing downloads are reported there, and
+# sudo prompts on /dev/tty, which a detached router has no claim on. So
+# claude-local runs this much in your window before detaching the real one.
+if [ -n "$PREFLIGHT" ]; then
+    exit 0
+fi
 
 echo "Serving $(presets | wc -l | tr -d ' ') models from models.ini on 127.0.0.1:${PORT}"
 

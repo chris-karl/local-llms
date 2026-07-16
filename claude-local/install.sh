@@ -53,7 +53,7 @@ echo "  linked   $LINK -> $TARGET"
 case ":$PATH:" in
     *":$BIN_DIR:"*)
         echo
-        echo "Done. Start the router with ./serve.sh, then run:  claude-local"
+        echo "Done. Run 'claude-local' in any project; it starts the router itself."
         exit 0
         ;;
 esac
@@ -125,4 +125,4 @@ echo
 echo "$BIN_DIR was not on your PATH. Pick up the change with:"
 echo "    . $rc          # or just open a new terminal"
 echo
-echo "Then, with ./serve.sh running, 'claude-local' works from anywhere."
+echo "Then 'claude-local' works from anywhere; it starts the router itself."
