@@ -2,7 +2,7 @@
 
 Local Qwen models, for two jobs:
 
-- **CLI chat, no server** — `./chat.sh qwen-9b`
+- **CLI chat, no server** — `./chat.sh qwen-35b`
 - **A local backend for Claude Code** — `./claude-local/claude-local.sh`
 
 `models.ini` is the single source of truth for both. Add a model once there and
@@ -14,7 +14,7 @@ layer on the GPU: there is no separate VRAM budget to fit them into, so the
 figures in `models.ini` are against total system RAM. The scripts hold nothing
 macOS-only beyond the wired-memory cap, which they skip where it doesn't exist,
 so a Linux or discrete-GPU machine runs them — but the sizing doesn't carry
-over. `qwen-27b`'s ~12 GB is a VRAM requirement there, and splitting a model
+over. `qwen-35b`'s ~12 GB is a VRAM requirement there, and splitting a model
 across GPU and CPU means lowering `n-gpu-layers` rather than pinning it to 999.
 
 ## Files
@@ -35,9 +35,9 @@ Run it bare and pick from a menu:
 $ ./chat.sh
 Available models:
 
-  1) qwen-9b          Q8_0     64K ctx   images
-  2) qwen-27b         IQ3_XS   8K ctx    text
-  3) qwen-27b-images  IQ3_XS   8K ctx    images
+  1) qwen-35b             UD-IQ2_M   64K ctx   text
+  2) qwen-27b-64k         UD-IQ2_M   64K ctx   text
+  3) qwen-27b-uncensored  IQ3_XS     8K ctx    images
 
 Choose [1-3, q to quit]:
 ```
@@ -45,8 +45,8 @@ Choose [1-3, q to quit]:
 Or skip the menu:
 
 ```sh
-./chat.sh qwen-9b
-./chat.sh qwen-9b --ctx-size 4096   # extra args pass through and win
+./chat.sh qwen-35b
+./chat.sh qwen-35b --ctx-size 4096   # extra args pass through and win
 ```
 
 This is `llama-cli` — nothing listens on a port.
@@ -69,9 +69,9 @@ lose the conversation.
 That is the whole command: with nothing listening yet, it starts a router
 (`serve.sh`) in the background and waits for it, which takes about a second.
 
-Inside, `/model` lists every model from `models.ini` — as `claude-qwen-9b`,
-`claude-qwen-27b`, … — and switches between them live, unloading the old model
-before loading the new one. The prefix is not cosmetic; see the notes.
+Inside, `/model` lists every model from `models.ini` — as `claude-qwen-35b`,
+`claude-qwen-27b-64k`, … — and switches between them live, unloading the old
+model before loading the new one. The prefix is not cosmetic; see the notes.
 
 `claude-local.sh` only sets env vars for its own process, so a plain `claude`
 in any other terminal still uses the real Anthropic API.
@@ -128,7 +128,7 @@ Messages API directly. Verified:
 
 - `POST /v1/messages` returns real Anthropic-shaped responses
   (`type: "message"`, content blocks, `stop_reason`, `usage`)
-- `tool_use` blocks work — the 9B correctly emitted a tool call and
+- `tool_use` blocks work — the models here correctly emit a tool call and
   `stop_reason: "tool_use"`, which is what Claude Code lives on
 - `POST /v1/messages/count_tokens` exists too
 
@@ -138,7 +138,7 @@ you're back to needing a proxy:
 
 ```sh
 curl -s -X POST 127.0.0.1:8080/v1/messages -H 'content-type: application/json' \
-  -d '{"model":"qwen-9b","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}'
+  -d '{"model":"qwen-35b","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}'
 ```
 
 ### Why these models don't use their own chat template
@@ -164,14 +164,16 @@ read like a llama.cpp or model bug. It's neither: nothing is wrong with the
 build, and the same model answers fine over `curl` — plain requests just never
 have a second system message. Worth knowing before re-quantizing anything.
 
-So `templates/` holds each model's own template with **one line changed**: a
+So `templates/` holds the model's own template with **one line changed**: a
 non-first system message renders in place as its own ChatML system turn instead
 of raising. Content and ordering are preserved, the leading system message is
 still folded into the tools block as before, and tool calls are unaffected
-(verified: `stop_reason: "tool_use"` with correctly parsed arguments). Both 27B
-presets share one file — the two GGUFs carry the same template.
+(verified: `stop_reason: "tool_use"` with correctly parsed arguments). Every
+preset shares the one file `templates/qwen3.6.jinja`: the official Qwen3.6
+repos ship a byte-identical template for the 27B and the 35B-A3B, and the
+uncensored 27B finetune carries the same one.
 
-These are **copies**, so unlike `hf-repo` they don't track the model: if a repo
+It is a **copy**, so unlike `hf-repo` it doesn't track the models: if a repo
 ever ships a new template, this one silently stays behind. To re-derive, print
 what the GGUF actually carries (no `--chat-template-file`, so it reports its
 own), then re-apply the one-line change:
@@ -184,16 +186,18 @@ curl -s 127.0.0.1:8099/props \
 
 ## Limits
 
-**Every model is selectable in `/model`; only `qwen-9b` has the context to
-drive Claude Code.** The picker lists all three because the router advertises
-all three. Both 27B presets run at `ctx-size 8192`, and Claude Code's system
-prompt plus tool definitions exceed that before you type anything, so picking
-one overflows context immediately. Raising their context adds KV cache on top
-of weights that already dominate the budget these presets are sized for, so
-whether it fits depends on the machine. They're for `./chat.sh`.
+**`qwen-35b` and `qwen-27b-64k` drive Claude Code; `qwen-27b-uncensored`
+doesn't.** The picker lists all three because the router advertises all three,
+but the uncensored preset runs at `ctx-size 8192`, and Claude Code's system
+prompt plus tool definitions exceed that before you type anything — picking it
+overflows context immediately. It's for `./chat.sh`.
 
-On the 9B, tool-calling accuracy is below a frontier model's — malformed calls
-and loops on non-trivial tasks are common.
+Both Claude Code presets run 2-bit quantizations (UD-IQ2_M): coding and
+tool-calling accuracy sit below the same models at 4-bit and up, which is the
+trade for fitting 64K context into this wired budget. Between the two, the 35B
+decodes several times faster (3B of its parameters are active per token), the
+27B is stronger per token — and its turns take correspondingly longer, since
+all 27B are active on every one.
 
 ## Notes
 
@@ -201,11 +205,11 @@ and loops on non-trivial tasks are common.
   `anthropic`.** Its `/model` picker fetches `GET /v1/models` from
   `ANTHROPIC_BASE_URL` and filters the result on `/^(claude|anthropic)/i` —
   hardcoded, with no env var or setting to turn it off (checked in 2.1.210). A
-  preset called `qwen-9b` is therefore dropped silently. So `serve.sh`
+  preset called `qwen-35b` is therefore dropped silently. So `serve.sh`
   advertises each section as `claude-<name>` and passes the bare name to
   `--alias`, which keeps it routable. One model, two names: `/model` sees
-  `claude-qwen-9b`, while `./chat.sh qwen-9b`, the OpenAI endpoint and
-  `"model": "qwen-9b"` over curl are all unaffected. Claude Code caches what it
+  `claude-qwen-35b`, while `./chat.sh qwen-35b`, the OpenAI endpoint and
+  `"model": "qwen-35b"` over curl are all unaffected. Claude Code caches what it
   discovers in `~/.claude/cache/gateway-models.json`, keyed by base URL — worth
   knowing if the picker ever looks stale.
 - **`serve.sh` rewrites `models.ini` before starting it.** Otherwise the router
@@ -246,10 +250,16 @@ and loops on non-trivial tasks are common.
   There, CPU and GPU share one pool of memory and the GPU may only wire down
   part of it, so a preset asking for more than the current cap gets it raised
   via `sudo sysctl iogpu.wired_limit_mb`. It's a cap, not a reservation, so a
-  raised limit costs nothing while only the 9B is loaded. Close memory-hungry
-  apps before loading a model that wants most of it. Both scripts skip the
+  raised limit costs nothing until a model actually fills it. Close
+  memory-hungry apps before loading a model that wants most of it. Both scripts skip the
   raise where the sysctl doesn't exist, and where the cap is already high
   enough — a machine with memory to spare is never asked for sudo.
+- **`spec-type = draft-mtp` needs a llama.cpp with MTP speculative decoding**
+  (verified in b10050). The MTP GGUFs embed the draft head, so there is no
+  separate draft model to download, and decoding runs 1.5–2x faster at
+  identical output quality. On a build without the flag, both scripts fail at
+  startup naming it; removing the two `spec-*` keys from a preset runs the
+  same GGUF without MTP.
 - **`--models-max 1` in `serve.sh` is load-bearing.** The default is 4; letting
   the router keep two of these models resident at once will OOM a machine sized
   for one.

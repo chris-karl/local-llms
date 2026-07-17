@@ -2,8 +2,8 @@
 # Interactive CLI chat. No server, no port.
 #
 #   ./chat.sh                      pick a model from a menu
-#   ./chat.sh qwen-9b              launch it directly
-#   ./chat.sh qwen-9b --ctx-size 4096   extra args pass through and win
+#   ./chat.sh qwen-35b             launch it directly
+#   ./chat.sh qwen-35b --ctx-size 4096   extra args pass through and win
 #
 # Also the download path: llama-cli --hf-repo fetches on first use, and
 # serve.sh needs models present already.
@@ -147,7 +147,7 @@ ARGS=$(awk -v want="$MODEL" -v dir="$DIR" '
     }
 ' "$INI")
 
-# Prepend, so an explicit "./chat.sh qwen-9b --ctx-size 4096" still wins:
+# Prepend, so an explicit "./chat.sh qwen-35b --ctx-size 4096" still wins:
 # llama.cpp takes the last occurrence of a repeated flag.
 QUOTED=$(printf '%s\n' "$ARGS" | sed -e "s/'/'\\\\''/g" -e "s/^/'/" -e "s/\$/'/" | tr '\n' ' ')
 eval "set -- $QUOTED \"\$@\""
