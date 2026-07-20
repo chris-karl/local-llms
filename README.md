@@ -1,6 +1,6 @@
 # local-llms
 
-Local Qwen models, for two jobs:
+Local LLMs, for two jobs:
 
 - **CLI chat, no server** — `./chat.sh qwen-35b`
 - **A local backend for Claude Code** — `./claude-local/claude-local.sh`
@@ -35,14 +35,14 @@ Run it bare and pick from a menu:
 $ ./chat.sh
 Available models:
 
-  1) qwen-35b             UD-IQ2_M   48K ctx   text
-  2) qwen-27b             UD-IQ2_M   48K ctx   text
-  3) qwen3-coder          UD-IQ2_M   32K ctx   text
-  4) gpt-oss              Q5_K_M     48K ctx   text
-  5) qwen-27b-uncensored  IQ3_XS     8K ctx    images
+  1) qwen-35b   UD-IQ2_M   48K ctx   text
+  2) ...
 
-Choose [1-5, q to quit]:
+Choose [1-N, q to quit]:
 ```
+
+The list is one row per preset in `models.ini` — name, quant, context, and
+text-or-images — built on the fly, so it tracks the file and needs no edits here.
 
 Or skip the menu:
 
@@ -71,9 +71,9 @@ lose the conversation.
 That is the whole command: with nothing listening yet, it starts a router
 (`serve.sh`) in the background and waits for it, which takes about a second.
 
-Inside, `/model` lists every model from `models.ini` — as `claude-qwen-35b`,
-`claude-qwen-27b`, … — and switches between them live, unloading the old model
-before loading the new one. The prefix is not cosmetic; see the notes.
+Inside, `/model` lists every model from `models.ini` — each as `claude-<name>`
+— and switches between them live, unloading the old model before loading the
+new one. The prefix is not cosmetic; see the notes.
 
 `claude-local.sh` only sets env vars for its own process, so a plain `claude`
 in any other terminal still uses the real Anthropic API.
@@ -166,10 +166,10 @@ So `templates/` holds the model's own template with **one line changed**: a
 non-first system message renders in place as its own ChatML system turn instead
 of raising. Content and ordering are preserved, the leading system message is
 still folded into the tools block as before, and tool calls are unaffected
-(verified: `stop_reason: "tool_use"` with correctly parsed arguments). The three
+(verified: `stop_reason: "tool_use"` with correctly parsed arguments). The
 Qwen3.6 presets share the one file `templates/qwen3.6.jinja`: the official
-Qwen3.6 repos ship a byte-identical template for the 27B and the 35B-A3B, and
-the uncensored 27B finetune carries the same one.
+Qwen3.6 repos ship a byte-identical template across the 27B, the 35B-A3B and
+the uncensored finetune.
 
 It is a **copy**, so unlike `hf-repo` it doesn't track the models: if a repo
 ever ships a new template, this one silently stays behind. To re-derive, print
@@ -182,41 +182,35 @@ curl -s 127.0.0.1:8099/props \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["chat_template"])'
 ```
 
-The two candidate presets (`qwen3-coder`, `gpt-oss`) set no
-`chat-template-file`, so they fall back to the template inside their own GGUF.
-That is enough for `./chat.sh`, but each speaks a different tool-call dialect
-than Qwen3.6 — `qwen3-coder` its own function-call format, `gpt-oss` the
-harmony format — so before either drives Claude Code its template must be
-derived by the procedure above, checked against the non-first-system-message
-failure, patched if it trips, and re-verified for `stop_reason: "tool_use"`.
-Until then, picking one in `/model` uses the unpatched built-in template.
+A preset that sets no `chat-template-file` falls back to the template inside its
+own GGUF. That is enough for `./chat.sh`, but a model whose tool-call format
+differs from Qwen3.6's needs its own template: derived by the procedure above,
+checked against the non-first-system-message failure, patched if it trips, and
+re-verified for `stop_reason: "tool_use"` before it can drive Claude Code. Until
+that is done, picking it in `/model` uses the unpatched built-in template.
 
 ## Limits
 
-**Two presets are verified for Claude Code, two are candidates under test, one
-is chat-only.** `qwen-35b` and `qwen-27b` are verified end to end. `qwen3-coder`
-and `gpt-oss` are staged for evaluation: they run today under `./chat.sh`, but
-need their chat template derived and their tool_use path re-verified before they
-can drive Claude Code (see the template section above). Adding them also blocks
-the router until they exist locally — `serve.sh` treats any un-downloaded preset
-as fatal — so fetch both with `./chat.sh qwen3-coder` and `./chat.sh gpt-oss`
-first, or drop the presets. `qwen-27b-uncensored` runs at `ctx-size 8192`, which
-Claude Code's system prompt plus tool definitions exceed before you type
-anything, so it stays on `./chat.sh`.
+**Not every preset drives Claude Code**, and each preset's comment in
+`models.ini` says whether it does. Two things have to hold. Its context has to
+clear Claude Code's system prompt and tool definitions — a few thousand tokens
+before you type anything, which is why a small-context chat preset can't. And it
+needs a patched chat template wired up (see above): a preset added without one
+still runs under `./chat.sh`, but won't drive Claude Code until its template is
+derived, patched and re-verified. A candidate also has to be downloaded before
+the router will start at all — `serve.sh` treats any un-downloaded preset as
+fatal — so fetch it once with `./chat.sh <name>` first, or drop the preset.
 
-Both verified presets run 2-bit quantizations (UD-IQ2_M) at 48K context: coding
-and tool-calling accuracy sit below the same models at 4-bit and up, the trade
-for fitting a 27–35B model plus that much context into this wired budget. Both
-need the wired cap raised to fit at all (see the notes), so the first launch
-asks for `sudo`. Verified end to end on a 16 GB M1 Pro: both return a correct
-`tool_use` on a Claude-Code-shaped request. Between them, the 35B decodes
-several times faster — 3B active parameters and mostly linear-attention layers
-keep its KV cache small, so it has room past 48K. The dense 27B is stronger per
-token but every parameter is active on every one, so its turns take several
-times longer; 48K is its ceiling here. The `gpt-oss` candidate is the one that
-would sidestep the 2-bit tax entirely: its experts are natively ~4-bit (MXFP4),
-so `Q5_K_M` is near-native rather than a 2-bit squeeze, which is the main reason
-it is worth testing against the pair above.
+The presets sized for Claude Code run 2-bit quantizations (UD-IQ2_M): coding and
+tool-calling accuracy sit below the same models at 4-bit and up, the trade for
+fitting a large model plus tens of thousands of tokens of context into this
+wired budget. They need the wired cap raised to fit at all (see the notes), so
+the first launch asks for `sudo`, and end to end on a 16 GB M1 Pro they return a
+correct `tool_use` on a Claude-Code-shaped request. A MoE with few active
+parameters decodes several times faster than a dense model of the same size, and
+a model that ships its weights at a higher native precision sidesteps the 2-bit
+trade — both reasons a candidate can be worth testing against the sized-down
+pair.
 
 ## Notes
 
@@ -244,8 +238,9 @@ it is worth testing against the pair above.
 - **Args passed to `serve.sh` override every preset.** They're forwarded to the
   router, which applies them to each model instance it spawns — and they *win*
   over `models.ini`. `./serve.sh --no-webui` is fine (the router keeps it to
-  itself), but `./serve.sh --ctx-size 65536` silently gives the 27B a 64K
-  context too, and it will OOM. Per-model settings belong in `models.ini`.
+  itself), but `./serve.sh --ctx-size 65536` silently forces that context on
+  every model it spawns, and one sized to its budget will OOM. Per-model
+  settings belong in `models.ini`.
 - **The auto-started router is detached from the terminal that started it.** It
   has to outlive that window closing, and ignore a Ctrl+C meant for Claude
   Code — a tty sends SIGINT to the whole foreground process group, and
