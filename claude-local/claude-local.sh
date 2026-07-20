@@ -51,11 +51,9 @@ export ANTHROPIC_AUTH_TOKEN="local"
 export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1
 
 # qwen-35b is the default: it holds Claude Code's system prompt at 48K and
-# decodes fastest (3B active parameters), which an agentic loop spends most
-# of its time on. qwen-27b trades speed for quality; qwen-27b-uncensored
-# overflows its 8K context immediately (see README).
-# The haiku slot is used for background chores (titles, summaries) and must
-# also resolve to a local model, or those requests 404 against the router.
+# decodes fastest (see models.ini for the trade-offs vs. the other presets).
+# The haiku slot handles background chores (titles, summaries) and must also
+# resolve to a local model, or those requests 404 against the router.
 export ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-claude-qwen-35b}"
 export ANTHROPIC_DEFAULT_HAIKU_MODEL="${ANTHROPIC_DEFAULT_HAIKU_MODEL:-claude-qwen-35b}"
 

@@ -206,81 +206,69 @@ tool-calling accuracy sit below the same models at 4-bit and up, the trade for
 fitting a large model plus tens of thousands of tokens of context into this
 wired budget. They need the wired cap raised to fit at all (see the notes), so
 the first launch asks for `sudo`, and end to end on a 16 GB M1 Pro they return a
-correct `tool_use` on a Claude-Code-shaped request. A MoE with few active
-parameters decodes several times faster than a dense model of the same size, and
-a model that ships its weights at a higher native precision sidesteps the 2-bit
-trade — both reasons a candidate can be worth testing against the sized-down
-pair.
+correct `tool_use` on a Claude-Code-shaped request.
 
 ## Notes
 
 - **Claude Code only shows models whose id starts with `claude` or
-  `anthropic`.** Its `/model` picker fetches `GET /v1/models` from
-  `ANTHROPIC_BASE_URL` and filters the result on `/^(claude|anthropic)/i` —
-  hardcoded, with no env var or setting to turn it off (checked in 2.1.210). A
-  preset called `qwen-35b` is therefore dropped silently. So `serve.sh`
-  advertises each section as `claude-<name>` and passes the bare name to
-  `--alias`, which keeps it routable. One model, two names: `/model` sees
-  `claude-qwen-35b`, while `./chat.sh qwen-35b`, the OpenAI endpoint and
-  `"model": "qwen-35b"` over curl are all unaffected. Claude Code caches what it
-  discovers in `~/.claude/cache/gateway-models.json`, keyed by base URL — worth
+  `anthropic`.** Its `/model` picker fetches `GET /v1/models` and filters on
+  `/^(claude|anthropic)/i` — hardcoded, no override (checked in 2.1.210), so a
+  bare `qwen-35b` is dropped silently. `serve.sh` advertises each section as
+  `claude-<name>` but passes the bare name to `--alias` to keep it routable:
+  `/model` sees `claude-qwen-35b`, while `./chat.sh qwen-35b`, the OpenAI
+  endpoint and `"model": "qwen-35b"` over curl are unaffected. Discovered models
+  are cached in `~/.claude/cache/gateway-models.json`, keyed by base URL — worth
   knowing if the picker ever looks stale.
 - **`serve.sh` rewrites `models.ini` before starting it.** Otherwise the router
-  advertises the whole llama.cpp cache next to your presets and `/model` lists
-  each model twice, with no flag to disable it in b9960. Suppressing it means
-  pointing the cache scan at an empty dir, which in turn rules out `hf-repo`
-  (it would re-download into that empty dir) — so `serve.sh` resolves each
-  `hf-repo` to the file it already refers to and passes absolute paths.
-  Resolution is redone every launch, so it can't pin a stale revision.
+  advertises the whole llama.cpp cache alongside your presets and `/model` lists
+  each model twice (no flag disables this in b9960). Suppressing that scan rules
+  out `hf-repo` (it would re-download into the empty scan dir), so `serve.sh`
+  resolves each `hf-repo` to its cached file and passes absolute paths — redone
+  every launch, so it can't pin a stale revision.
 - **`serve.sh` can't download.** Because of the above, a preset must already be
-  in the cache. If it isn't, `serve.sh` tells you which and exits — run
-  `./chat.sh <name>` once to fetch it. `chat.sh` still uses `hf-repo` directly.
-- **Args passed to `serve.sh` override every preset.** They're forwarded to the
-  router, which applies them to each model instance it spawns — and they *win*
-  over `models.ini`. `./serve.sh --no-webui` is fine (the router keeps it to
-  itself), but `./serve.sh --ctx-size 65536` silently forces that context on
-  every model it spawns, and one sized to its budget will OOM. Per-model
-  settings belong in `models.ini`.
+  in the cache; if it isn't, `serve.sh` names it and exits — run `./chat.sh
+  <name>` once to fetch it. `chat.sh` still uses `hf-repo` directly.
+- **Args passed to `serve.sh` override every preset.** The router forwards them
+  to every model instance it spawns, where they *win* over `models.ini`.
+  `./serve.sh --no-webui` is fine (the router keeps it), but `./serve.sh
+  --ctx-size 65536` forces that context on every model, and one sized to a
+  smaller budget will OOM. Per-model settings belong in `models.ini`.
 - **The auto-started router is detached from the terminal that started it.** It
-  has to outlive that window closing, and ignore a Ctrl+C meant for Claude
-  Code — a tty sends SIGINT to the whole foreground process group, and
-  `llama-server` acts on it. So `claude-local` starts it under `nohup`, in a
-  process group of its own (`setsid`, or `set -m` where there's no `setsid`),
-  with stdin on `/dev/null` and output in `router.log` — next to the pid files,
-  under `$TMPDIR/local_LLMs.<uid>/claude-local.<port>/`. That log is where a
-  router that won't start says why, and `claude-local` prints its tail when the
-  router doesn't come up.
+  must outlive that window closing and ignore a Ctrl+C meant for Claude Code (a
+  tty sends SIGINT to the whole foreground group, which `llama-server` acts on).
+  So `claude-local` starts it under `nohup` in its own process group (`setsid`,
+  or `set -m` as a fallback), stdin on `/dev/null`, output in `router.log`
+  alongside the pid files under `$TMPDIR/local_LLMs.<uid>/claude-local.<port>/`.
+  That log is where a router that won't start says why; `claude-local` prints
+  its tail when the router doesn't come up.
 - **`claude-local` runs `serve.sh --preflight` first, in your terminal.**
-  Anything needing a human has to happen before the router detaches: the `sudo`
-  for the wired-limit raise prompts on `/dev/tty`, which a background process
-  group may not read, and a missing download should be reported where you're
-  looking, not in a log. `--preflight` does exactly that much of `serve.sh` —
-  resolve presets, report missing downloads, raise the cap — then exits without
-  serving.
+  Anything needing a human must happen before the router detaches: the `sudo`
+  for the wired-limit raise prompts on `/dev/tty`, which a background group may
+  not read, and a missing download should surface where you're looking, not in a
+  log. `--preflight` does just that — resolve presets, report missing downloads,
+  raise the cap — then exits without serving.
 - **The wired-memory limit is an Apple Silicon thing, and resets on reboot.**
-  There, CPU and GPU share one pool of memory and the GPU may only wire down
-  part of it, so a preset asking for more than the current cap gets it raised
-  via `sudo sysctl iogpu.wired_limit_mb`. It's a cap, not a reservation, so a
-  raised limit costs nothing until a model actually fills it. Close
-  memory-hungry apps before loading a model that wants most of it. Both
-  scripts skip the raise where the sysctl doesn't exist, and where the cap is
-  already high enough — a machine with memory to spare is never asked for sudo.
+  CPU and GPU share one memory pool and the GPU may only wire down part of it,
+  so a preset asking for more than the current cap gets it raised via `sudo
+  sysctl iogpu.wired_limit_mb`. It's a cap, not a reservation, so it costs
+  nothing until a model fills it — but close memory-hungry apps before loading
+  one that wants most of it. Both scripts skip the raise where the sysctl is
+  absent or the cap is already high enough, so a machine with memory to spare is
+  never asked for sudo.
 - **`parallel = 1` is a memory knob, not a request limit.** Qwen3.6's hybrid
-  attention replaces most of the KV cache with recurrent state, which
-  llama-server allocates per slot, and its slot count defaults to 4. A single
-  Claude Code session uses one slot; capping it there avoids paying for three
-  idle copies of that state. Requests beyond the one slot queue and complete;
-  nothing fails.
+  attention replaces most of the KV cache with recurrent state, allocated per
+  slot, and the slot count defaults to 4. One Claude Code session uses one slot;
+  capping it there avoids three idle copies of that state. Extra requests queue
+  and complete; nothing fails.
 - **`--models-max 1` in `serve.sh` is load-bearing.** The default is 4; letting
   the router keep two of these models resident at once will OOM a machine sized
   for one.
 - **INI keys must be real llama.cpp long flags** — the router refuses to start
   on an unknown key. Use `n-gpu-layers`, not `ngl` (llama-cli only takes the
-  short `-ngl`). Two keys are special. `wired-limit-mb` is a macOS sysctl
-  rather than anything llama.cpp knows about: both scripts read it and strip it
-  before launching. They strip that exact spelling and nothing else, so a typo
-  reaches llama.cpp and is rejected by name instead of quietly leaving the cap
-  where it was. `chat-template-file` is a real flag and reaches llama.cpp as
-  written, but its *value* is rewritten: a relative path resolves against
-  `models.ini`'s directory, so the presets stay portable and both scripts work
-  from any CWD. An absolute path is left alone.
+  short `-ngl`). Two keys are special. `wired-limit-mb` is a macOS sysctl, not
+  anything llama.cpp knows: both scripts read it and strip that exact spelling
+  before launching, so a typo reaches llama.cpp and is rejected by name instead
+  of silently leaving the cap unchanged. `chat-template-file` reaches llama.cpp
+  as written, but its *value* is rewritten — a relative path resolves against
+  `models.ini`'s directory so presets stay portable from any CWD; an absolute
+  path is left alone.
