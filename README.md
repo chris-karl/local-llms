@@ -80,15 +80,12 @@ in any other terminal still uses the real Anthropic API.
 
 These models are far too big to load twice, so there is only ever one router
 and every `claude-local` shares it. It is refcounted rather than owned: the
-first one starts it, each later one joins the running one in milliseconds, and
-it is stopped once the **last** one exits — not when the one that started it
-does.
-
-So closing the window you opened first leaves the router up for the others,
-and closing the last one takes it down and gives the model's RAM back.
-Sessions that end badly count the same: the bookkeeping is a directory of pid
-files, swept every few seconds by the process that owns the router, so a
-`kill -9`'d session drops out of it exactly like a clean exit does.
+first one starts it, each later one joins in milliseconds, and it is stopped
+once the **last** one exits — not when the one that started it does. So closing
+the window you opened first leaves the router up for the others. Sessions that
+end badly count the same: the bookkeeping is a directory of pid files, swept
+every few seconds by the process that owns the router, so a `kill -9`'d session
+drops out of it exactly like a clean exit does.
 
 Running `./serve.sh` yourself still works, and what you start stays yours:
 `claude-local` uses a router it finds already listening and never stops one it
@@ -159,10 +156,9 @@ system-role message is appended to the **end** of `messages` (the "Available
 agent types for the Agent tool" block). That trailing one is not first, so the
 template raises and llama.cpp turns the exception into the 400 above.
 
-The error names the template, not the message that tripped it, which makes it
-read like a llama.cpp or model bug. It's neither: nothing is wrong with the
-build, and the same model answers fine over `curl` — plain requests just never
-have a second system message. Worth knowing before re-quantizing anything.
+The error names the template, not the message that tripped it, so it reads like
+a llama.cpp or model bug. It's neither: the same model answers fine over
+`curl` — plain requests just never have a second system message.
 
 So `templates/` holds the model's own template with **one line changed**: a
 non-first system message renders in place as its own ChatML system turn instead
@@ -194,16 +190,14 @@ overflows context immediately. It's for `./chat.sh`.
 
 Both Claude Code presets run 2-bit quantizations (UD-IQ2_M) at 48K context:
 coding and tool-calling accuracy sit below the same models at 4-bit and up,
-which is the trade for fitting a 27–35B model plus that much context into this
-wired budget. Both need the wired cap raised to fit at all (see the notes);
-the machine's ~12 GiB default is not enough, so the first launch asks for
-`sudo`. Verified end to end on a 16 GB M1 Pro: both return a correct
-`tool_use` on a Claude-Code-shaped request. Between them, the 35B decodes
-several times faster — 3B of its parameters are active per token, and its
-mostly linear-attention layers keep the KV cache small, so it has memory to
-spare at 48K. The dense 27B is stronger per token but every parameter is
-active on every one, so its turns take several times longer and its KV cache
-is larger; 48K is its ceiling here, where the 35B has room past it.
+the trade for fitting a 27–35B model plus that much context into this wired
+budget. Both need the wired cap raised to fit at all (see the notes), so the
+first launch asks for `sudo`. Verified end to end on a 16 GB M1 Pro: both
+return a correct `tool_use` on a Claude-Code-shaped request. Between them, the
+35B decodes several times faster — 3B active parameters and mostly
+linear-attention layers keep its KV cache small, so it has room past 48K. The
+dense 27B is stronger per token but every parameter is active on every one, so
+its turns take several times longer; 48K is its ceiling here.
 
 ## Notes
 
@@ -235,40 +229,34 @@ is larger; 48K is its ceiling here, where the 35B has room past it.
   context too, and it will OOM. Per-model settings belong in `models.ini`.
 - **The auto-started router is detached from the terminal that started it.** It
   has to outlive that window closing, and ignore a Ctrl+C meant for Claude
-  Code — a tty sends SIGINT to every process in the foreground process group,
-  and `llama-server` acts on it. So `claude-local` starts it under `nohup`
-  (SIGHUP ignored, which survives `exec`), in a process group of its own
-  (`setsid` where there is one, otherwise `set -m`, which is how `/bin/sh`
-  hands a background job its own group), with stdin on `/dev/null` and its
-  output in `router.log` — next to the pid files, under
-  `$TMPDIR/local_LLMs.<uid>/claude-local.<port>/`. That log is where a router
-  that won't start says why, and `claude-local` prints the tail of it when the
+  Code — a tty sends SIGINT to the whole foreground process group, and
+  `llama-server` acts on it. So `claude-local` starts it under `nohup`, in a
+  process group of its own (`setsid`, or `set -m` where there's no `setsid`),
+  with stdin on `/dev/null` and output in `router.log` — next to the pid files,
+  under `$TMPDIR/local_LLMs.<uid>/claude-local.<port>/`. That log is where a
+  router that won't start says why, and `claude-local` prints its tail when the
   router doesn't come up.
 - **`claude-local` runs `serve.sh --preflight` first, in your terminal.**
-  Anything that needs a human has to happen before the router is detached:
-  `sudo` prompts on `/dev/tty`, which a background process group may not read
-  from, so the wired-limit raise cannot be left to the detached router — and a
-  preset that still needs downloading should say so where you are looking,
-  rather than in a log file. `--preflight` does exactly that much of
-  `serve.sh` — resolve the presets, report missing downloads, raise the cap —
-  and exits without serving.
+  Anything needing a human has to happen before the router detaches: the `sudo`
+  for the wired-limit raise prompts on `/dev/tty`, which a background process
+  group may not read, and a missing download should be reported where you're
+  looking, not in a log. `--preflight` does exactly that much of `serve.sh` —
+  resolve presets, report missing downloads, raise the cap — then exits without
+  serving.
 - **The wired-memory limit is an Apple Silicon thing, and resets on reboot.**
   There, CPU and GPU share one pool of memory and the GPU may only wire down
   part of it, so a preset asking for more than the current cap gets it raised
   via `sudo sysctl iogpu.wired_limit_mb`. It's a cap, not a reservation, so a
   raised limit costs nothing until a model actually fills it. Close
-  memory-hungry apps before loading a model that wants most of it. Both scripts skip the
-  raise where the sysctl doesn't exist, and where the cap is already high
-  enough — a machine with memory to spare is never asked for sudo.
+  memory-hungry apps before loading a model that wants most of it. Both
+  scripts skip the raise where the sysctl doesn't exist, and where the cap is
+  already high enough — a machine with memory to spare is never asked for sudo.
 - **`parallel = 1` is a memory knob, not a request limit.** Qwen3.6's hybrid
   attention replaces most of the KV cache with recurrent state, which
   llama-server allocates per slot, and its slot count defaults to 4. A single
   Claude Code session uses one slot; capping it there avoids paying for three
   idle copies of that state. Requests beyond the one slot queue and complete;
-  nothing fails. (Unsloth also ships MTP variants of these GGUFs for faster
-  speculative decoding, but the multi-token-prediction head needs more memory
-  than this budget has, and llama-server disables it under pressure anyway, so
-  the plain GGUFs are used.)
+  nothing fails.
 - **`--models-max 1` in `serve.sh` is load-bearing.** The default is 4; letting
   the router keep two of these models resident at once will OOM a machine sized
   for one.
