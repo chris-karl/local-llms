@@ -4,7 +4,7 @@
 # terminal still talks to the real Anthropic API.
 #
 #   ./claude-local.sh                  start on the default model
-#   ANTHROPIC_MODEL=claude-qwen-27b-64k ./claude-local.sh
+#   ANTHROPIC_MODEL=claude-qwen-27b ./claude-local.sh
 #
 # The router is shared and refcounted: it is stopped once the last claude-local
 # exits, not when the one that started it does. See router.sh. One started by
@@ -50,10 +50,11 @@ export ANTHROPIC_AUTH_TOKEN="local"
 # Populates /model from the router's /v1/models. Needs Claude Code >= 2.1.129.
 export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1
 
-# qwen-35b is the default: 64K context for Claude Code's system prompt and
-# the fastest decoding here (3B active parameters), which an agentic loop
-# spends most of its time on. qwen-27b-64k trades speed for quality;
-# qwen-27b-uncensored overflows its 8K context immediately (see README).
+# qwen-35b is the default: 48K context holds Claude Code's system prompt
+# with room to spare, and it has the fastest decoding here (3B active
+# parameters), which an agentic loop spends most of its time on. qwen-27b
+# trades speed for quality; qwen-27b-uncensored overflows its 8K context
+# immediately (see README).
 # The haiku slot is used for background chores (titles, summaries) and must
 # also resolve to a local model, or those requests 404 against the router.
 export ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-claude-qwen-35b}"

@@ -35,8 +35,8 @@ Run it bare and pick from a menu:
 $ ./chat.sh
 Available models:
 
-  1) qwen-35b             UD-IQ2_M   64K ctx   text
-  2) qwen-27b-64k         UD-IQ2_M   64K ctx   text
+  1) qwen-35b             UD-IQ2_M   48K ctx   text
+  2) qwen-27b             UD-IQ2_M   48K ctx   text
   3) qwen-27b-uncensored  IQ3_XS     8K ctx    images
 
 Choose [1-3, q to quit]:
@@ -70,8 +70,8 @@ That is the whole command: with nothing listening yet, it starts a router
 (`serve.sh`) in the background and waits for it, which takes about a second.
 
 Inside, `/model` lists every model from `models.ini` — as `claude-qwen-35b`,
-`claude-qwen-27b-64k`, … — and switches between them live, unloading the old
-model before loading the new one. The prefix is not cosmetic; see the notes.
+`claude-qwen-27b`, … — and switches between them live, unloading the old model
+before loading the new one. The prefix is not cosmetic; see the notes.
 
 `claude-local.sh` only sets env vars for its own process, so a plain `claude`
 in any other terminal still uses the real Anthropic API.
@@ -186,18 +186,24 @@ curl -s 127.0.0.1:8099/props \
 
 ## Limits
 
-**`qwen-35b` and `qwen-27b-64k` drive Claude Code; `qwen-27b-uncensored`
+**`qwen-35b` and `qwen-27b` drive Claude Code; `qwen-27b-uncensored`
 doesn't.** The picker lists all three because the router advertises all three,
 but the uncensored preset runs at `ctx-size 8192`, and Claude Code's system
 prompt plus tool definitions exceed that before you type anything — picking it
 overflows context immediately. It's for `./chat.sh`.
 
-Both Claude Code presets run 2-bit quantizations (UD-IQ2_M): coding and
-tool-calling accuracy sit below the same models at 4-bit and up, which is the
-trade for fitting 64K context into this wired budget. Between the two, the 35B
-decodes several times faster (3B of its parameters are active per token), the
-27B is stronger per token — and its turns take correspondingly longer, since
-all 27B are active on every one.
+Both Claude Code presets run 2-bit quantizations (UD-IQ2_M) at 48K context:
+coding and tool-calling accuracy sit below the same models at 4-bit and up,
+which is the trade for fitting a 27–35B model plus that much context into this
+wired budget. Both need the wired cap raised to fit at all (see the notes);
+the machine's ~12 GiB default is not enough, so the first launch asks for
+`sudo`. Verified end to end on a 16 GB M1 Pro: both return a correct
+`tool_use` on a Claude-Code-shaped request. Between them, the 35B decodes
+several times faster — 3B of its parameters are active per token, and its
+mostly linear-attention layers keep the KV cache small, so it has memory to
+spare at 48K. The dense 27B is stronger per token but every parameter is
+active on every one, so its turns take several times longer and its KV cache
+is larger; 48K is its ceiling here, where the 35B has room past it.
 
 ## Notes
 
@@ -254,12 +260,15 @@ all 27B are active on every one.
   memory-hungry apps before loading a model that wants most of it. Both scripts skip the
   raise where the sysctl doesn't exist, and where the cap is already high
   enough — a machine with memory to spare is never asked for sudo.
-- **`spec-type = draft-mtp` needs a llama.cpp with MTP speculative decoding**
-  (verified in b10050). The MTP GGUFs embed the draft head, so there is no
-  separate draft model to download, and decoding runs 1.5–2x faster at
-  identical output quality. On a build without the flag, both scripts fail at
-  startup naming it; removing the two `spec-*` keys from a preset runs the
-  same GGUF without MTP.
+- **`parallel = 1` is a memory knob, not a request limit.** Qwen3.6's hybrid
+  attention replaces most of the KV cache with recurrent state, which
+  llama-server allocates per slot, and its slot count defaults to 4. A single
+  Claude Code session uses one slot; capping it there avoids paying for three
+  idle copies of that state. Requests beyond the one slot queue and complete;
+  nothing fails. (Unsloth also ships MTP variants of these GGUFs for faster
+  speculative decoding, but the multi-token-prediction head needs more memory
+  than this budget has, and llama-server disables it under pressure anyway, so
+  the plain GGUFs are used.)
 - **`--models-max 1` in `serve.sh` is load-bearing.** The default is 4; letting
   the router keep two of these models resident at once will OOM a machine sized
   for one.
