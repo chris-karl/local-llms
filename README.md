@@ -25,7 +25,7 @@ across GPU and CPU means lowering `n-gpu-layers` rather than pinning it to 999.
 | `chat.sh`       | Interactive `llama-cli` chat, with a model picker. No server, no port.                  |
 | `serve.sh`      | `llama-server` in router mode, for Claude Code.                                         |
 | `claude-local/` | Runs Claude Code against the router, starting and sharing one; plus install/uninstall.  |
-| `templates/`    | The patched chat templates Claude Code needs. Without them it fails — see below.        |
+| `templates/`    | Chat templates for the presets whose built-in one won't drive Claude Code — see below.  |
 
 ## CLI chat
 
@@ -140,7 +140,7 @@ curl -s -X POST 127.0.0.1:8080/v1/messages -H 'content-type: application/json' \
   -d '{"model":"qwen-35b","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}'
 ```
 
-### Why these models don't use their own chat template
+### Chat templates and Claude Code
 
 Every Qwen3.6 preset points `chat-template-file` at a copy in `templates/`,
 because the template baked into those GGUFs makes Claude Code fail on **every**
@@ -182,12 +182,17 @@ curl -s 127.0.0.1:8099/props \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["chat_template"])'
 ```
 
-A preset that sets no `chat-template-file` falls back to the template inside its
-own GGUF. That is enough for `./chat.sh`, but a model whose tool-call format
-differs from Qwen3.6's needs its own template: derived by the procedure above,
-checked against the non-first-system-message failure, patched if it trips, and
-re-verified for `stop_reason: "tool_use"` before it can drive Claude Code. Until
-that is done, picking it in `/model` uses the unpatched built-in template.
+A preset that sets no `chat-template-file` uses the template inside its own
+GGUF. That works when the built-in both renders a non-first system message
+(Claude Code always sends one) and declares the model's tool-call format to
+llama.cpp — which the MoE candidates' built-ins do, verified end to end. A
+preset pins a copy in `templates/` only when its built-in fails one of those:
+the Qwen3.6 template raises on the second system message (above), and the
+Devstral GGUF here carries a minimal template with no tool syntax at all, so it
+uses Unsloth's tool-enabled one. Derive and check any new model's template with
+the procedure above — a correct `stop_reason: "tool_use"` on a Claude-Code-shaped
+request (top-level system, a trailing second system message, and a tool) is the
+bar.
 
 ## Limits
 
@@ -195,9 +200,9 @@ that is done, picking it in `/model` uses the unpatched built-in template.
 `models.ini` says whether it does. Two things have to hold. Its context has to
 clear Claude Code's system prompt and tool definitions — a few thousand tokens
 before you type anything, which is why a small-context chat preset can't. And it
-needs a patched chat template wired up (see above): a preset added without one
-still runs under `./chat.sh`, but won't drive Claude Code until its template is
-derived, patched and re-verified. A candidate also has to be downloaded before
+needs a working chat template (see above): a newly added preset still runs under
+`./chat.sh`, but won't drive Claude Code until its template is verified — and
+pinned, if the built-in falls short. A candidate also has to be downloaded before
 the router will start at all — `serve.sh` treats any un-downloaded preset as
 fatal — so fetch it once with `./chat.sh <name>` first, or drop the preset.
 
