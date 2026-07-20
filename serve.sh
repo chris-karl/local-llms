@@ -202,10 +202,19 @@ echo "Serving $(presets | wc -l | tr -d ' ') models from models.ini on 127.0.0.1
 # (no flag for that in b9960) -- which is also why the presets carry absolute
 # paths by now. --models-max 1 is load-bearing: on a machine sized for exactly
 # one of these models, the default of 4 would OOM on a /model switch.
+#
+# llama-server runs behind router-shim.py, which listens on $PORT and forwards
+# to it on a private port. The shim strips value-constraint keywords from tool
+# schemas so llama.cpp's tool-call grammar stays under its rule limit for
+# gpt-oss and devstral; without it their Claude Code requests 400 with "failed
+# to parse grammar" (see the README, and the shim's own header). It owns the
+# llama-server it launches -- dies with it, kills it on TERM -- so router.sh
+# still just supervises one process on $PORT. --host/--port for llama-server are
+# added by the shim.
 mkdir -p "$TMP/emptycache"
-HF_HOME="$TMP/emptycache" exec llama-server \
+HF_HOME="$TMP/emptycache" exec python3 "$DIR/router-shim.py" \
+    --listen "127.0.0.1:$PORT" \
+    -- llama-server \
     --models-preset "$RESOLVED" \
     --models-max 1 \
-    --host 127.0.0.1 \
-    --port "$PORT" \
     "$@"

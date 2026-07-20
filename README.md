@@ -23,7 +23,8 @@ across GPU and CPU means lowering `n-gpu-layers` rather than pinning it to 999.
 |-----------------|-----------------------------------------------------------------------------------------|
 | `models.ini`    | Every model + its tuned flags. Edit this, not the scripts.                              |
 | `chat.sh`       | Interactive `llama-cli` chat, with a model picker. No server, no port.                  |
-| `serve.sh`      | `llama-server` in router mode, for Claude Code.                                         |
+| `serve.sh`      | `llama-server` in router mode, for Claude Code (behind `router-shim.py`).               |
+| `router-shim.py`| Sanitizes tool schemas so llama.cpp's tool grammar fits; `serve.sh` runs it. See below. |
 | `claude-local/` | Runs Claude Code against the router, starting and sharing one; plus install/uninstall.  |
 | `templates/`    | Chat templates for the presets whose built-in one won't drive Claude Code — see below.  |
 
@@ -118,9 +119,9 @@ PATH block, and the bin dir, leaving no trace. Each step is scoped to what
 `install.sh` made — only a link pointing back here, only the marker-delimited
 block (a PATH line you wrote yourself isn't matched), and only an empty dir.
 
-### Why there's no proxy here
+### No translation proxy, one thin shim
 
-The usual advice is that Claude Code needs an Anthropic→OpenAI translation
+The usual advice is that Claude Code needs an Anthropic→OpenAI *translation*
 proxy (LiteLLM, claude-code-router) in front of a local server. That is **not**
 true for this llama.cpp build: b9960's `llama-server` implements the Anthropic
 Messages API directly. Verified:
@@ -131,14 +132,29 @@ Messages API directly. Verified:
   `stop_reason: "tool_use"`, which is what Claude Code lives on
 - `POST /v1/messages/count_tokens` exists too
 
-So `ANTHROPIC_BASE_URL` points straight at llama-server. If you ever downgrade
-llama.cpp, re-check before trusting it — a 404 means no Anthropic support and
-you're back to needing a proxy:
+So nothing translates formats. If you ever downgrade llama.cpp, re-check before
+trusting it — a 404 means no Anthropic support and you're back to needing a
+translation proxy:
 
 ```sh
 curl -s -X POST 127.0.0.1:8080/v1/messages -H 'content-type: application/json' \
   -d '{"model":"qwen-35b","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}'
 ```
+
+There is one thin local shim in the path, though. `serve.sh` runs
+`router-shim.py` on `$PORT` with llama-server on a private port behind it. It is
+**not** a translation proxy: it forwards the Anthropic API byte-for-byte,
+streaming and all, and only edits one thing — it strips JSON-Schema *value*
+constraints (`pattern`, `format`, `min*`/`max*`, `propertyNames`, …) out of tool
+definitions on the way through. llama.cpp compiles those into a grammar that
+forces tool-call arguments to match, and across Claude Code's full ~27-tool
+suite the combined grammar overflows its rule limit, so **gpt-oss and devstral**
+otherwise fail with `400 … failed to parse grammar`. Dropping the value
+constraints keeps the grammar small; a tool's name, description and parameter
+structure are untouched, so tool calls still work. The Qwen presets don't need
+it (their format doesn't grammar-constrain arguments), but it's harmless to them
+and always in front. It needs `python3` — the only runtime dependency beyond
+llama.cpp and the shell.
 
 ### Chat templates and Claude Code
 
@@ -206,12 +222,17 @@ pinned, if the built-in falls short. A candidate also has to be downloaded befor
 the router will start at all — `serve.sh` treats any un-downloaded preset as
 fatal — so fetch it once with `./chat.sh <name>` first, or drop the preset.
 
-The presets sized for Claude Code run 2-bit quantizations (UD-IQ2_M): coding and
-tool-calling accuracy sit below the same models at 4-bit and up, the trade for
-fitting a large model plus tens of thousands of tokens of context into this
-wired budget. They need the wired cap raised to fit at all (see the notes), so
-the first launch asks for `sudo`, and end to end on a 16 GB M1 Pro they return a
-correct `tool_use` on a Claude-Code-shaped request.
+The 2-bit presets (UD-IQ2_M) trade accuracy for fit: coding and tool-calling
+accuracy sit below the same models at 4-bit and up, the price of a large model
+plus tens of thousands of tokens of context in this wired budget. They need the
+wired cap raised to fit at all (see the notes), so the first launch asks for
+`sudo`. `gpt-oss` and `devstral` additionally rely on `router-shim.py` (above)
+for Claude Code's tool suite, which `serve.sh` starts for you.
+
+Expect the first turn of a session to be slow whichever preset you pick: it
+prefills Claude Code's whole system prompt and tool suite (~20K tokens) before
+the first token — tens of seconds on the MoE presets, longer on the dense ones —
+after which llama.cpp reuses the cached prefix and later turns are quicker.
 
 ## Notes
 
