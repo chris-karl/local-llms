@@ -25,7 +25,7 @@ across GPU and CPU means lowering `n-gpu-layers` rather than pinning it to 999.
 | `chat.sh`       | Interactive `llama-cli` chat, with a model picker. No server, no port.                  |
 | `serve.sh`      | `llama-server` in router mode, for Claude Code.                                         |
 | `claude-local/` | Runs Claude Code against the router, starting and sharing one; plus install/uninstall.  |
-| `templates/`    | Each model's chat template, patched. Claude Code doesn't work without this — see below. |
+| `templates/`    | The patched chat templates Claude Code needs. Without them it fails — see below.        |
 
 ## CLI chat
 
@@ -37,9 +37,11 @@ Available models:
 
   1) qwen-35b             UD-IQ2_M   48K ctx   text
   2) qwen-27b             UD-IQ2_M   48K ctx   text
-  3) qwen-27b-uncensored  IQ3_XS     8K ctx    images
+  3) qwen3-coder          UD-IQ2_M   32K ctx   text
+  4) gpt-oss              Q5_K_M     48K ctx   text
+  5) qwen-27b-uncensored  IQ3_XS     8K ctx    images
 
-Choose [1-3, q to quit]:
+Choose [1-5, q to quit]:
 ```
 
 Or skip the menu:
@@ -140,9 +142,9 @@ curl -s -X POST 127.0.0.1:8080/v1/messages -H 'content-type: application/json' \
 
 ### Why these models don't use their own chat template
 
-Every preset points `chat-template-file` at a copy in `templates/`, because the
-template baked into these GGUFs makes Claude Code fail on **every** request,
-before a single token is generated:
+Every Qwen3.6 preset points `chat-template-file` at a copy in `templates/`,
+because the template baked into those GGUFs makes Claude Code fail on **every**
+request, before a single token is generated:
 
 ```
 API Error: 400 Unable to generate parser for this template. Automatic parser
@@ -164,10 +166,10 @@ So `templates/` holds the model's own template with **one line changed**: a
 non-first system message renders in place as its own ChatML system turn instead
 of raising. Content and ordering are preserved, the leading system message is
 still folded into the tools block as before, and tool calls are unaffected
-(verified: `stop_reason: "tool_use"` with correctly parsed arguments). Every
-preset shares the one file `templates/qwen3.6.jinja`: the official Qwen3.6
-repos ship a byte-identical template for the 27B and the 35B-A3B, and the
-uncensored 27B finetune carries the same one.
+(verified: `stop_reason: "tool_use"` with correctly parsed arguments). The three
+Qwen3.6 presets share the one file `templates/qwen3.6.jinja`: the official
+Qwen3.6 repos ship a byte-identical template for the 27B and the 35B-A3B, and
+the uncensored 27B finetune carries the same one.
 
 It is a **copy**, so unlike `hf-repo` it doesn't track the models: if a repo
 ever ships a new template, this one silently stays behind. To re-derive, print
@@ -180,24 +182,41 @@ curl -s 127.0.0.1:8099/props \
   | python3 -c 'import json,sys; print(json.load(sys.stdin)["chat_template"])'
 ```
 
+The two candidate presets (`qwen3-coder`, `gpt-oss`) set no
+`chat-template-file`, so they fall back to the template inside their own GGUF.
+That is enough for `./chat.sh`, but each speaks a different tool-call dialect
+than Qwen3.6 — `qwen3-coder` its own function-call format, `gpt-oss` the
+harmony format — so before either drives Claude Code its template must be
+derived by the procedure above, checked against the non-first-system-message
+failure, patched if it trips, and re-verified for `stop_reason: "tool_use"`.
+Until then, picking one in `/model` uses the unpatched built-in template.
+
 ## Limits
 
-**`qwen-35b` and `qwen-27b` drive Claude Code; `qwen-27b-uncensored`
-doesn't.** The picker lists all three because the router advertises all three,
-but the uncensored preset runs at `ctx-size 8192`, and Claude Code's system
-prompt plus tool definitions exceed that before you type anything — picking it
-overflows context immediately. It's for `./chat.sh`.
+**Two presets are verified for Claude Code, two are candidates under test, one
+is chat-only.** `qwen-35b` and `qwen-27b` are verified end to end. `qwen3-coder`
+and `gpt-oss` are staged for evaluation: they run today under `./chat.sh`, but
+need their chat template derived and their tool_use path re-verified before they
+can drive Claude Code (see the template section above). Adding them also blocks
+the router until they exist locally — `serve.sh` treats any un-downloaded preset
+as fatal — so fetch both with `./chat.sh qwen3-coder` and `./chat.sh gpt-oss`
+first, or drop the presets. `qwen-27b-uncensored` runs at `ctx-size 8192`, which
+Claude Code's system prompt plus tool definitions exceed before you type
+anything, so it stays on `./chat.sh`.
 
-Both Claude Code presets run 2-bit quantizations (UD-IQ2_M) at 48K context:
-coding and tool-calling accuracy sit below the same models at 4-bit and up,
-the trade for fitting a 27–35B model plus that much context into this wired
-budget. Both need the wired cap raised to fit at all (see the notes), so the
-first launch asks for `sudo`. Verified end to end on a 16 GB M1 Pro: both
-return a correct `tool_use` on a Claude-Code-shaped request. Between them, the
-35B decodes several times faster — 3B active parameters and mostly
-linear-attention layers keep its KV cache small, so it has room past 48K. The
-dense 27B is stronger per token but every parameter is active on every one, so
-its turns take several times longer; 48K is its ceiling here.
+Both verified presets run 2-bit quantizations (UD-IQ2_M) at 48K context: coding
+and tool-calling accuracy sit below the same models at 4-bit and up, the trade
+for fitting a 27–35B model plus that much context into this wired budget. Both
+need the wired cap raised to fit at all (see the notes), so the first launch
+asks for `sudo`. Verified end to end on a 16 GB M1 Pro: both return a correct
+`tool_use` on a Claude-Code-shaped request. Between them, the 35B decodes
+several times faster — 3B active parameters and mostly linear-attention layers
+keep its KV cache small, so it has room past 48K. The dense 27B is stronger per
+token but every parameter is active on every one, so its turns take several
+times longer; 48K is its ceiling here. The `gpt-oss` candidate is the one that
+would sidestep the 2-bit tax entirely: its experts are natively ~4-bit (MXFP4),
+so `Q5_K_M` is near-native rather than a 2-bit squeeze, which is the main reason
+it is worth testing against the pair above.
 
 ## Notes
 
