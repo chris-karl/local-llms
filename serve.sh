@@ -47,7 +47,7 @@ resolve_gguf() {
     _spec=$1
     _repo=${_spec%:*}
     _quant=${_spec##*:}
-    _dir="$HUB/models--$(echo "${_repo%%/*}" | tr -d '\n')--$(echo "${_repo#*/}" | tr -d '\n')"
+    _dir="$HUB/models--${_repo%%/*}--${_repo#*/}"
     [ -d "$_dir" ] || return 1
     _sha=$(cat "$_dir/refs/main" 2>/dev/null) || return 1
     [ -n "$_sha" ] || return 1
