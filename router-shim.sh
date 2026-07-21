@@ -97,10 +97,32 @@ handle() {
 
     url="http://127.0.0.1:$UP$path"
     if [ "$stream" = 1 ]; then
-        # Optimistic 200: after sanitizing, a streaming request that got this far
-        # succeeds. curl -N keeps the SSE flowing through unbuffered.
-        printf 'HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n'
-        curl -sN -X POST "$url" -H 'content-type: application/json' --data-binary @"$body"
+        # Relay the upstream's real status and headers, then stream the body.
+        # curl -i writes status + headers + body in order; the read loop consumes
+        # just the header block (read is byte-at-a-time on a pipe, so it stops at
+        # the blank line and leaves the body untouched) and cat streams the body
+        # live. Framing headers are dropped and the body delimited by
+        # Connection: close. This is what makes a streaming request the router
+        # rejects (a context overflow, say) come back as its real 4xx/5xx rather
+        # than a 200 with an error body mislabelled as SSE.
+        curl -sN -i -X POST "$url" -H 'content-type: application/json' --data-binary @"$body" | {
+            if ! IFS= read -r _st || [ -z "$_st" ]; then
+                printf 'HTTP/1.1 502 .\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n'
+                printf '{"error":{"type":"unavailable","message":"no response from llama-server"}}'
+                exit 0
+            fi
+            printf '%s\r\n' "${_st%"$CR"}"
+            while IFS= read -r _h; do
+                _h=${_h%"$CR"}
+                [ -z "$_h" ] && break
+                case $_h in
+                    [Tt]ransfer-[Ee]ncoding:* | [Cc]ontent-[Ll]ength:* | [Cc]onnection:*) continue ;;
+                esac
+                printf '%s\r\n' "$_h"
+            done
+            printf 'Connection: close\r\n\r\n'
+            cat
+        }
     else
         out=$(mktemp) || { rm -f "$body"; return 0; }
         if [ "$method" = POST ]; then
