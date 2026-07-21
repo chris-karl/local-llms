@@ -58,6 +58,15 @@ handle() {
     path=${rest%% *}
     case $path in /*) ;; *) path=/ ;; esac
 
+    # claude-local points Claude Code at .../m/<model>/... so each session sees
+    # only its own model in the /model picker. Strip the prefix here and remember
+    # <model> to filter GET /v1/models below. Other callers omit it and are
+    # forwarded unchanged.
+    only_model=""
+    case $path in
+        /m/*/*) rest2=${path#/m/}; only_model=${rest2%%/*}; path=/${rest2#*/} ;;
+    esac
+
     # Headers: we only need Content-Length. read is byte-at-a-time on a socket,
     # so it stops exactly at the blank line and leaves the body unread.
     clen=0
@@ -101,6 +110,14 @@ handle() {
             code=$(curl -s -o "$out" -w '%{http_code}' -X "$method" "$url")
         fi
         [ -n "$code" ] || code=502
+        # Keep only the session's model in the picker's list.
+        if [ -n "$only_model" ]; then
+            case $path in
+                /v1/models*)
+                    if jq -c --arg m "$only_model" '.data |= map(select(.id == $m))' \
+                          "$out" > "$out.f" 2>/dev/null; then mv "$out.f" "$out"; else rm -f "$out.f"; fi ;;
+            esac
+        fi
         printf 'HTTP/1.1 %s .\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n' "$code"
         cat "$out"
         rm -f "$out"

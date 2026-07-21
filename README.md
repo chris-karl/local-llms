@@ -69,12 +69,16 @@ lose the conversation.
 ./claude-local/claude-local.sh
 ```
 
-That is the whole command: with nothing listening yet, it starts a router
-(`serve.sh`) in the background and waits for it, which takes about a second.
+It opens a model menu — the Claude Code-capable presets from `models.ini` (the
+small-context chat ones are left out) — and once you pick one it starts a router
+(`serve.sh`) in the background if none is listening, then launches Claude Code
+against it. Skip the menu with `ANTHROPIC_MODEL=claude-<name> claude-local`.
 
-Inside, `/model` lists every model from `models.ini` — each as `claude-<name>`
-— and switches between them live, unloading the old model before loading the
-new one. The prefix is not cosmetic; see the notes.
+**The picked model runs the whole session.** Claude Code's main slot and its
+background "haiku" slot (titles, summaries) both use it, so the one resident
+model (`--models-max 1`) never thrashes between two. `/model` is scoped to just
+that model — to change models, quit and relaunch. (The `claude-` prefix on the
+ids is still not cosmetic; see the notes.)
 
 `claude-local.sh` only sets env vars for its own process, so a plain `claude`
 in any other terminal still uses the real Anthropic API.
