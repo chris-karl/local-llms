@@ -23,8 +23,8 @@ across GPU and CPU means lowering `n-gpu-layers` rather than pinning it to 999.
 |-----------------|-----------------------------------------------------------------------------------------|
 | `models.ini`    | Every model + its tuned flags. Edit this, not the scripts.                              |
 | `chat.sh`       | Interactive `llama-cli` chat, with a model picker. No server, no port.                  |
-| `serve.sh`      | `llama-server` in router mode, for Claude Code (behind `router-shim.py`).               |
-| `router-shim.py`| Sanitizes tool schemas so llama.cpp's tool grammar fits; `serve.sh` runs it. See below. |
+| `serve.sh`      | `llama-server` in router mode, for Claude Code (behind `router-shim.sh`).               |
+| `router-shim.sh`| Sanitizes tool schemas so llama.cpp's tool grammar fits; `serve.sh` runs it. See below. |
 | `claude-local/` | Runs Claude Code against the router, starting and sharing one; plus install/uninstall.  |
 | `templates/`    | Chat templates for the presets whose built-in one won't drive Claude Code — see below.  |
 
@@ -142,19 +142,24 @@ curl -s -X POST 127.0.0.1:8080/v1/messages -H 'content-type: application/json' \
 ```
 
 There is one thin local shim in the path, though. `serve.sh` runs
-`router-shim.py` on `$PORT` with llama-server on a private port behind it. It is
-**not** a translation proxy: it forwards the Anthropic API byte-for-byte,
-streaming and all, and only edits one thing — it strips JSON-Schema *value*
-constraints (`pattern`, `format`, `min*`/`max*`, `propertyNames`, …) out of tool
-definitions on the way through. llama.cpp compiles those into a grammar that
-forces tool-call arguments to match, and across Claude Code's full ~27-tool
-suite the combined grammar overflows its rule limit, so **gpt-oss and devstral**
-otherwise fail with `400 … failed to parse grammar`. Dropping the value
-constraints keeps the grammar small; a tool's name, description and parameter
-structure are untouched, so tool calls still work. The Qwen presets don't need
-it (their format doesn't grammar-constrain arguments), but it's harmless to them
-and always in front. It needs `python3` — the only runtime dependency beyond
-llama.cpp and the shell.
+`router-shim.sh` on `$PORT` with llama-server on a private port behind it. It is
+**not** a translation proxy: it forwards the Anthropic API unchanged, streaming
+and all, and only edits one thing — it strips JSON-Schema *value* constraints
+(`pattern`, `format`, `min*`/`max*`, `propertyNames`, …) out of tool definitions
+on the way through. llama.cpp compiles those into a grammar that forces
+tool-call arguments to match, and across Claude Code's full ~27-tool suite the
+combined grammar overflows its rule limit, so **gpt-oss and devstral** otherwise
+fail with `400 … failed to parse grammar` — and neither the stable nor the HEAD
+llama.cpp build fixes it, nor is there a flag. Dropping the value constraints
+keeps the grammar small; a tool's name, description and parameter structure are
+untouched, so tool calls still work. The Qwen presets don't need it (their
+format doesn't grammar-constrain arguments), but it's harmless to them and
+always in front.
+
+The shim is plain shell: `socat` forks a handler per connection, `jq` strips the
+schemas, `curl` relays to llama-server. So it leans on two small tools beyond
+llama.cpp and the shell — **`jq`** (ships with recent macOS) and **`socat`**
+(`brew install socat`) — but no language runtime.
 
 ### Chat templates and Claude Code
 
@@ -194,8 +199,7 @@ own), then re-apply the one-line change:
 
 ```sh
 llama-server -m <model.gguf> --port 8099 &
-curl -s 127.0.0.1:8099/props \
-  | python3 -c 'import json,sys; print(json.load(sys.stdin)["chat_template"])'
+curl -s 127.0.0.1:8099/props | jq -r '.chat_template'
 ```
 
 A preset that sets no `chat-template-file` uses the template inside its own
@@ -226,7 +230,7 @@ The 2-bit presets (UD-IQ2_M) trade accuracy for fit: coding and tool-calling
 accuracy sit below the same models at 4-bit and up, the price of a large model
 plus tens of thousands of tokens of context in this wired budget. They need the
 wired cap raised to fit at all (see the notes), so the first launch asks for
-`sudo`. `gpt-oss` and `devstral` additionally rely on `router-shim.py` (above)
+`sudo`. `gpt-oss` and `devstral` additionally rely on `router-shim.sh` (above)
 for Claude Code's tool suite, which `serve.sh` starts for you.
 
 Expect the first turn of a session to be slow whichever preset you pick: it
