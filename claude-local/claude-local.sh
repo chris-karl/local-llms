@@ -3,15 +3,15 @@
 # Everything is scoped to this one process, so a plain "claude" in any other
 # terminal still talks to the real Anthropic API.
 #
-#   ./claude-local.sh                  start on the default model
-#   ANTHROPIC_MODEL=claude-qwen-27b ./claude-local.sh
+#   ./claude-local.sh                  pick a model from a menu, then start
 #
 # The router is shared and refcounted: it is stopped once the last claude-local
 # exits, not when the one that started it does. See router.sh. One started by
 # hand with ./serve.sh is used as-is and never stopped.
 #
 # ./install.sh puts this on your PATH as "claude-local", usable from any
-# directory. Once inside, /model lists every section from models.ini.
+# directory. The session runs on the model you pick; /model is scoped to just
+# it, so switching models means restarting.
 set -eu
 
 # Follow the symlink install.sh puts on your PATH, so router.sh and serve.sh
@@ -31,46 +31,39 @@ while [ -L "$SELF" ] && [ "$_hops" -lt 16 ]; do
     _hops=$((_hops + 1))
 done
 DIR=$(CDPATH= cd -- "$(dirname -- "$SELF")" && pwd)
+INI="$DIR/../models.ini"
+. "$DIR/../lib.sh"
 
 PORT=${PORT:-8080}
 BASE="http://127.0.0.1:${PORT}"
 
-# Pick the model for this session up front, unless one is given via
-# ANTHROPIC_MODEL. Only one model is resident (--models-max 1) and Claude Code
-# drives two slots -- a main model and a background "haiku" one -- so both run
-# the SAME model, chosen here. The picker is then scoped to it (see the base URL
-# below and router-shim.sh), so switching means restarting. Menu excludes
-# presets whose context is too small for Claude Code's system prompt.
-if [ -z "${ANTHROPIC_MODEL:-}" ]; then
-    INI="$DIR/../models.ini"
-    MIN_CTX=32768   # below this a preset can't hold Claude Code's ~29K prompt
-    ROWS=$(awk -v min="$MIN_CTX" '
-        function flush() { if (sec != "" && ctx + 0 >= min) printf "%s\t%dK\n", sec, ctx / 1024; sec = ""; ctx = 0 }
-        /^[ \t]*#/ { next }
-        /^[ \t]*\[/ { flush(); s = $0; gsub(/^[ \t]*\[|\][ \t]*$/, "", s); sec = s; next }
-        sec == "" || !/=/ { next }
-        {
-            k = $0; sub(/=.*/, "", k); gsub(/[ \t]/, "", k)
-            if (k == "ctx-size") { v = $0; sub(/^[^=]*=/, "", v); gsub(/[ \t]/, "", v); ctx = v }
-        }
-        END { flush() }
-    ' "$INI")
-    [ -n "$ROWS" ] || { echo "claude-local: no Claude Code-capable models in $INI" >&2; exit 1; }
-    echo "Model for this Claude Code session:"
-    echo
-    printf '%s\n' "$ROWS" | awk -F'\t' '{ printf "  %d) %-18s %s ctx\n", NR, $1, $2 }'
-    echo
-    _n=$(printf '%s\n' "$ROWS" | grep -c .)
-    printf 'Choose [1-%d, q to quit]: ' "$_n"
-    IFS= read -r _choice < /dev/tty || { echo; exit 1; }
-    case $_choice in
-        q | Q | '') echo "nothing selected"; exit 0 ;;
-        *[!0-9]*) echo "not a number: $_choice" >&2; exit 1 ;;
-    esac
-    { [ "$_choice" -ge 1 ] && [ "$_choice" -le "$_n" ]; } || { echo "out of range: $_choice" >&2; exit 1; }
-    ANTHROPIC_MODEL="claude-$(printf '%s\n' "$ROWS" | sed -n "${_choice}p" | cut -f1)"
-    echo
-fi
+# Pick the model for this session. Only one model is resident (--models-max 1)
+# and Claude Code drives two slots -- a main model and a background "haiku" one
+# -- so both run the SAME model, chosen here. The picker is then scoped to it
+# (see the base URL below and router-shim.sh), so switching means restarting.
+# Presets whose context is too small for Claude Code's system prompt are left out.
+MIN_CTX=32768   # below this a preset can't hold Claude Code's ~29K prompt
+_rows=$(for _m in $(presets); do
+    _ctx=$(key_of "$_m" ctx-size)
+    if [ -n "$_ctx" ] && [ "$_ctx" -ge "$MIN_CTX" ] 2>/dev/null; then
+        printf '%s\t%s\n' "$_m" "$_ctx"
+    fi
+done)
+[ -n "$_rows" ] || { echo "claude-local: no Claude Code-capable models in $INI" >&2; exit 1; }
+echo "Model for this Claude Code session:"
+echo
+printf '%s\n' "$_rows" | awk -F'\t' '{ printf "  %d) %-18s %dK ctx\n", NR, $1, $2 / 1024 }'
+echo
+_n=$(printf '%s\n' "$_rows" | grep -c .)
+printf 'Choose [1-%d, q to quit]: ' "$_n"
+IFS= read -r _choice < /dev/tty || { echo; exit 1; }
+case $_choice in
+    q | Q | '') echo "nothing selected"; exit 0 ;;
+    *[!0-9]*) echo "not a number: $_choice" >&2; exit 1 ;;
+esac
+{ [ "$_choice" -ge 1 ] && [ "$_choice" -le "$_n" ]; } || { echo "out of range: $_choice" >&2; exit 1; }
+ANTHROPIC_MODEL="claude-$(printf '%s\n' "$_rows" | sed -n "${_choice}p" | cut -f1)"
+echo
 
 # Registers this shell as one of the things keeping the router alive, starting
 # one if there is none. "exec claude" below keeps this pid, so the router lives

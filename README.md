@@ -27,6 +27,7 @@ across GPU and CPU means lowering `n-gpu-layers` rather than pinning it to 999.
 | `router-shim.sh`| Sanitizes tool schemas so llama.cpp's tool grammar fits; `serve.sh` runs it. See below. |
 | `claude-local/` | Runs Claude Code against the router, starting and sharing one; plus install/uninstall.  |
 | `templates/`    | Chat templates for the presets whose built-in one won't drive Claude Code — see below.  |
+| `lib.sh`        | Shared shell helpers (`models.ini` parsing, the wired-limit raise), sourced by the rest. |
 
 ## CLI chat
 
@@ -72,7 +73,7 @@ lose the conversation.
 It opens a model menu — the Claude Code-capable presets from `models.ini` (the
 small-context chat ones are left out) — and once you pick one it starts a router
 (`serve.sh`) in the background if none is listening, then launches Claude Code
-against it. Skip the menu with `ANTHROPIC_MODEL=claude-<name> claude-local`.
+against it.
 
 **The picked model runs the whole session.** Claude Code's main slot and its
 background "haiku" slot (titles, summaries) both use it, so the one resident
