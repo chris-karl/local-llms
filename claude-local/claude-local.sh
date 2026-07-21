@@ -53,8 +53,12 @@ export CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1
 # qwen-35b is the default: it holds Claude Code's system prompt at 48K and
 # decodes fastest (see models.ini for the trade-offs vs. the other presets).
 # The haiku slot handles background chores (titles, summaries) and must also
-# resolve to a local model, or those requests 404 against the router.
+# resolve to a local model, or those requests 404 against the router. It
+# defaults to the *same* model as the main one: --models-max 1 keeps a single
+# model resident, so two different presets make the router thrash between them,
+# and a request landing while the other is mid-load 500s ("failed to load").
+# Override it only for a separate haiku model, accepting the reloads.
 export ANTHROPIC_MODEL="${ANTHROPIC_MODEL:-claude-qwen-35b}"
-export ANTHROPIC_DEFAULT_HAIKU_MODEL="${ANTHROPIC_DEFAULT_HAIKU_MODEL:-claude-qwen-35b}"
+export ANTHROPIC_DEFAULT_HAIKU_MODEL="${ANTHROPIC_DEFAULT_HAIKU_MODEL:-$ANTHROPIC_MODEL}"
 
 exec claude "$@"

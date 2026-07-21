@@ -293,6 +293,16 @@ after which llama.cpp reuses the cached prefix and later turns are quicker.
 - **`--models-max 1` in `serve.sh` is load-bearing.** The default is 4; letting
   the router keep two of these models resident at once will OOM a machine sized
   for one.
+- **Pick your model at launch, not with `/model` mid-session.** Because only one
+  model is resident, Claude Code's two slots — the main model and the small
+  "haiku" model it uses for background chores — must be the *same* preset, or the
+  router thrashes reloading between them (and a request landing mid-load 500s
+  with `model … failed to load`). `claude-local` keeps them equal by defaulting
+  the haiku slot to `$ANTHROPIC_MODEL`, so `ANTHROPIC_MODEL=claude-devstral
+  claude-local` runs everything on one model. Switching with `/model` after
+  launch changes only the main slot and leaves haiku behind — so to change
+  models, relaunch with `ANTHROPIC_MODEL` set (or also set
+  `ANTHROPIC_DEFAULT_HAIKU_MODEL`).
 - **INI keys must be real llama.cpp long flags** — the router refuses to start
   on an unknown key. Use `n-gpu-layers`, not `ngl` (llama-cli only takes the
   short `-ngl`). Two keys are special. `wired-limit-mb` is a macOS sysctl, not
