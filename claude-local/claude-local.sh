@@ -53,16 +53,10 @@ done)
 echo "Model for this Claude Code session:"
 echo
 printf '%s\n' "$_rows" | awk -F'\t' '{ printf "  %d) %-18s %dK ctx\n", NR, $1, $2 / 1024 }'
-echo
 _n=$(printf '%s\n' "$_rows" | grep -c .)
-printf 'Choose [1-%d, q to quit]: ' "$_n"
-IFS= read -r _choice < /dev/tty || { echo; exit 1; }
-case $_choice in
-    q | Q | '') echo "nothing selected"; exit 0 ;;
-    *[!0-9]*) echo "not a number: $_choice" >&2; exit 1 ;;
-esac
-{ [ "$_choice" -ge 1 ] && [ "$_choice" -le "$_n" ]; } || { echo "out of range: $_choice" >&2; exit 1; }
-ANTHROPIC_MODEL="claude-$(printf '%s\n' "$_rows" | sed -n "${_choice}p" | cut -f1)"
+# Read from the terminal, not the caller's stdin: we exec claude next.
+choose "$_n" < /dev/tty
+ANTHROPIC_MODEL="claude-$(printf '%s\n' "$_rows" | sed -n "${CHOICE}p" | cut -f1)"
 echo
 
 # Registers this shell as one of the things keeping the router alive, starting

@@ -59,23 +59,9 @@ else
         i=$((i + 1))
         printf '  %d) %s\n' "$i" "$label"
     done < "$MENU"
-    echo
-    # Read stdin rather than /dev/tty, so "echo 2 | ./chat.sh" works too.
-    printf 'Choose [1-%d, q to quit]: ' "$i"
-    if ! IFS= read -r choice; then
-        echo
-        echo "no selection" >&2
-        exit 1
-    fi
-    case "$choice" in
-        q | Q | "") echo "nothing selected"; exit 0 ;;
-        *[!0-9]*) echo "not a number: $choice" >&2; exit 1 ;;
-    esac
-    if [ "$choice" -lt 1 ] || [ "$choice" -gt "$i" ]; then
-        echo "out of range: $choice" >&2
-        exit 1
-    fi
-    MODEL=$(cut -f1 "$MENU" | sed -n "${choice}p")
+    # choose reads stdin, not /dev/tty, so "echo 2 | ./chat.sh" works too.
+    choose "$i"
+    MODEL=$(cut -f1 "$MENU" | sed -n "${CHOICE}p")
     echo
 fi
 

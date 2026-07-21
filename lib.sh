@@ -46,3 +46,30 @@ raise_wired_limit() {
     echo "Raising GPU wired limit to ${_need} MB (sudo)..."
     sudo sysctl iogpu.wired_limit_mb="$_need" || exit 1
 }
+
+# Prompt for a menu choice in [1..$1], read from stdin, and leave the picked
+# 1-based index in $CHOICE. Prints its own prompt (a leading blank line first).
+# Redirect from /dev/tty at the call site when the terminal, not the script's
+# stdin, is the source. Quits the whole script on q/empty (exit 0) or bad input
+# (exit 1) -- so call it directly, never in $(...), where those exits would
+# leave only the subshell and the caller would sail on.
+CHOICE=""
+choose() {
+    _max=$1
+    echo
+    printf 'Choose [1-%d, q to quit]: ' "$_max"
+    if ! IFS= read -r _c; then
+        echo
+        echo "no selection" >&2
+        exit 1
+    fi
+    case $_c in
+        q | Q | '') echo "nothing selected"; exit 0 ;;
+        *[!0-9]*) echo "not a number: $_c" >&2; exit 1 ;;
+    esac
+    if [ "$_c" -lt 1 ] || [ "$_c" -gt "$_max" ]; then
+        echo "out of range: $_c" >&2
+        exit 1
+    fi
+    CHOICE=$_c
+}
