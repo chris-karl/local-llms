@@ -9,28 +9,15 @@
 # fix). Undo with ./uninstall.sh.
 set -eu
 
-MARK_START='# >>> claude-local >>>'
-MARK_END='# <<< claude-local <<<'
-
-for arg in "$@"; do
-    case $arg in
-        # The header block above, up to the first line of actual code.
-        -h|--help) sed -n '2,/^[^#]/p' "$0" | sed '$d' | cut -c3-; exit 0 ;;
-        *) echo "unknown option: $arg (try --help)" >&2; exit 2 ;;
-    esac
-done
-
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-TARGET="$DIR/claude-local.sh"
+. "$DIR/install-common.sh"
+parse_opts "$@"
 
 if [ ! -f "$TARGET" ]; then
     echo "claude-local.sh is not next to this script (looked in $DIR)" >&2
     exit 1
 fi
 [ -x "$TARGET" ] || chmod +x "$TARGET"
-
-BIN_DIR=${BIN_DIR:-$HOME/.local/bin}
-LINK="$BIN_DIR/claude-local"
 
 # Never clobber a real file: only ever replace a symlink we could have made.
 if [ -e "$LINK" ] && [ ! -L "$LINK" ]; then

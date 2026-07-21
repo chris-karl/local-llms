@@ -10,21 +10,9 @@
 # an empty bin dir. Nothing here touches claude-local.sh or the models.
 set -eu
 
-MARK_START='# >>> claude-local >>>'
-MARK_END='# <<< claude-local <<<'
-
-for arg in "$@"; do
-    case $arg in
-        # The header block above, up to the first line of actual code.
-        -h|--help) sed -n '2,/^[^#]/p' "$0" | sed '$d' | cut -c3-; exit 0 ;;
-        *) echo "unknown option: $arg (try --help)" >&2; exit 2 ;;
-    esac
-done
-
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-TARGET="$DIR/claude-local.sh"
-BIN_DIR=${BIN_DIR:-$HOME/.local/bin}
-LINK="$BIN_DIR/claude-local"
+. "$DIR/install-common.sh"
+parse_opts "$@"
 
 if [ ! -e "$LINK" ] && [ ! -L "$LINK" ]; then
     echo "  none     no link at $LINK"
